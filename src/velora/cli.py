@@ -1,10 +1,11 @@
 """Command-line entrypoint for Velora.
 
 This entrypoint reports package metadata (`--version`, `--help`) and, by
-default, is the composition root: it resolves Configuration, then
-bootstraps the Runtime (ADR-0005). Per ADR-0002, this module is extended
-across roadmap phases, never rewritten: `--version` and `--help` keep
-working exactly as they did in the Foundation phase.
+default, is the composition root: it resolves Configuration, configures
+Logging, then bootstraps the Runtime with Logging attached as a listener
+(ADR-0005, ADR-0006). Per ADR-0002, this module is extended across
+roadmap phases, never rewritten: `--version` and `--help` keep working
+exactly as they did in the Foundation phase.
 """
 
 from __future__ import annotations
@@ -14,11 +15,16 @@ import sys
 from typing import TYPE_CHECKING
 
 from velora import __version__
+from velora.configuration import LogLevel as ConfigurationLogLevel
 from velora.configuration import VeloraConfigurationError, VeloraSettings, load_settings
+from velora.logging import LoggingSettings, RuntimeEventLogger, configure_logging
+from velora.logging import LogLevel as LoggingLogLevel
 from velora.runtime import Runtime, VeloraRuntimeError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from velora.runtime import RuntimeEventListener
 
 _PROG_NAME = "velora"
 
@@ -36,25 +42,46 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _translate_log_level(level: ConfigurationLogLevel) -> LoggingLogLevel:
+    """Translate Configuration's LogLevel into Logging's LogLevel.
+
+    The two are deliberately independent types (ADR-0006): neither
+    package imports the other. The composition root is the only place
+    that knows about both and bridges them, by name.
+    """
+    return LoggingLogLevel[level.name]
+
+
+def _default_runtime_factory(listeners: Sequence[RuntimeEventListener]) -> Runtime:
+    return Runtime(listeners=listeners)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     settings_loader: Callable[[], VeloraSettings] = load_settings,
-    runtime_factory: Callable[[], Runtime] = Runtime,
+    logging_factory: Callable[[LoggingSettings], RuntimeEventLogger] = configure_logging,
+    runtime_factory: Callable[[Sequence[RuntimeEventListener]], Runtime] = _default_runtime_factory,
 ) -> int:
     """Entry point invoked by the `velora` console script.
 
-    Resolves Configuration, bootstraps a Runtime, reports its execution
-    id and resolved environment, and shuts it down cleanly.
-    `settings_loader` and `runtime_factory` exist so callers — tests, and
-    later roadmap phases wiring real components — can inject
-    preconfigured instances instead of the parameterless defaults; the
-    CLI never constructs their internal dependencies itself.
+    Resolves Configuration, configures Logging from it, bootstraps a
+    Runtime with Logging attached as a listener, reports the Runtime's
+    execution id and resolved environment, and shuts it down cleanly.
+    `settings_loader`, `logging_factory`, and `runtime_factory` exist so
+    callers — tests, and later roadmap phases wiring real components —
+    can inject preconfigured instances instead of the parameterless
+    defaults; the CLI never constructs their internal dependencies
+    itself.
 
-    Configuration is resolved before the Runtime is constructed (ADR-0005):
-    a configuration failure is reported the same way a runtime failure
-    is, without ever having started anything that would need shutting
-    down.
+    Configuration is resolved before Logging or the Runtime exist
+    (ADR-0005): a configuration failure is reported to stderr directly,
+    the same way a runtime failure is, without ever having started
+    anything that would need shutting down. Once Logging exists, it logs
+    every Runtime lifecycle event (including a failing one) on its own;
+    this function's own stderr message on a Runtime failure is not
+    redundant with that — it is guaranteed to appear regardless of the
+    configured log level, while the log line is not.
 
     Returns the process exit code. Argument parsing errors and `--help`/
     `--version` are handled by argparse, which exits the process directly;
@@ -69,7 +96,10 @@ def main(
         print(f"{_PROG_NAME}: fatal: {exc}", file=sys.stderr)
         return 1
 
-    runtime = runtime_factory()
+    logging_settings = LoggingSettings(level=_translate_log_level(settings.log_level))
+    event_logger = logging_factory(logging_settings)
+
+    runtime = runtime_factory([event_logger])
     try:
         with runtime:
             print(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from velora.configuration import Environment, load_settings
+from velora.configuration import Environment, LogLevel, load_settings
 
 if TYPE_CHECKING:
     import pytest
@@ -22,6 +22,12 @@ def test_uses_injected_source_when_given() -> None:
     settings = load_settings(_DictSource({"VELORA_ENVIRONMENT": "staging"}))
 
     assert settings.environment is Environment.STAGING
+
+
+def test_reads_log_level_from_injected_source() -> None:
+    settings = load_settings(_DictSource({"VELORA_LOG_LEVEL": "warning"}))
+
+    assert settings.log_level is LogLevel.WARNING
 
 
 def test_defaults_to_environment_source(monkeypatch: pytest.MonkeyPatch) -> None:

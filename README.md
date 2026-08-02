@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Configuration** (PR-003). Ver
+**Fase: Logging** (PR-004). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado y
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente.
@@ -31,20 +31,29 @@ uv run velora --version
 uv run velora --help
 ```
 
-`uv run velora`, sin flags, resuelve la configuración, bootstrapea el
-Runtime, imprime su `runtime_id` de ejecución y el entorno resuelto, y lo
-detiene de forma ordenada:
+`uv run velora`, sin flags, resuelve la configuración, configura el
+logging, bootstrapea el Runtime, imprime su `runtime_id` de ejecución y
+el entorno resuelto, y lo detiene de forma ordenada:
 
 ```
+2026-08-02 19:24:08,315 INFO velora: runtime bootstrap starting
+2026-08-02 19:24:08,316 INFO velora: runtime bootstrap completed
 velora 0.1.0 — runtime 97811f88-8968-4a89-a392-c8b02a856fbb running (development).
+2026-08-02 19:24:08,316 INFO velora: runtime shutdown starting
+2026-08-02 19:24:08,316 INFO velora: runtime shutdown completed
 velora 0.1.0 — runtime stopped cleanly.
 ```
 
-El entorno se controla con la variable `VELORA_ENVIRONMENT`
-(`development` por defecto, `staging`, o `production`):
+(Las líneas `INFO ...` van a `stderr`; las líneas `velora 0.1.0 ...` van
+a `stdout`.)
+
+El entorno se controla con `VELORA_ENVIRONMENT`
+(`development` por defecto, `staging`, o `production`), y la verbosidad
+del log con `VELORA_LOG_LEVEL` (`debug`, `info` por defecto, `warning`,
+`error`, `critical`):
 
 ```bash
-VELORA_ENVIRONMENT=production uv run velora
+VELORA_ENVIRONMENT=production VELORA_LOG_LEVEL=warning uv run velora
 ```
 
 ## Desarrollo

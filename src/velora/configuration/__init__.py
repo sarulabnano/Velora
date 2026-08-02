@@ -14,6 +14,7 @@ from velora.configuration._errors import (
     MissingConfigurationValueError,
     VeloraConfigurationError,
 )
+from velora.configuration._log_level import LogLevel
 from velora.configuration._settings import VeloraSettings
 from velora.configuration._sources import ConfigSource, EnvironmentSource
 
@@ -22,6 +23,7 @@ __all__ = [
     "Environment",
     "EnvironmentSource",
     "InvalidConfigurationValueError",
+    "LogLevel",
     "MissingConfigurationValueError",
     "VeloraConfigurationError",
     "VeloraSettings",
