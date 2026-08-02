@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Foundation** (PR-001). El Runtime todavía no existe; ver
+**Fase: Runtime** (PR-002). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado y
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente.
@@ -29,6 +29,14 @@ uv run velora
 ```bash
 uv run velora --version
 uv run velora --help
+```
+
+`uv run velora`, sin flags, bootstrapea el Runtime, imprime su
+`runtime_id` de ejecución y lo detiene de forma ordenada:
+
+```
+velora 0.1.0 — runtime 97811f88-8968-4a89-a392-c8b02a856fbb running.
+velora 0.1.0 — runtime stopped cleanly.
 ```
 
 ## Desarrollo
