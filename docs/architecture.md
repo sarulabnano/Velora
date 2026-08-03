@@ -5,12 +5,14 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Providers
+## Estado: Services (capacidad) — `NarrationService`
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
-infraestructura** (PR-005), **Providers — text_generation** (PR-006).
-Fase siguiente: **Engines** (PR-007), o un segundo dominio de Providers.
+infraestructura** (PR-005), **Providers — text_generation** (PR-006),
+**Services — capacidad: NarrationService** (PR-007).
+Fase siguiente: **Engines** (por decidir explícitamente qué Engine),
+o un segundo dominio de Providers/Service de capacidad.
 
 ## Estructura del repositorio
 
@@ -22,6 +24,7 @@ src/velora/
     configuration/           # Ver secciones anteriores de este documento
     logging/                 # (sin cambios en este PR)
     services/                 # Clock, IdGenerator (infraestructura, PR-005)
+        narration/               # NarrationService (capacidad, PR-007)
     runtime/                   # (sin cambios funcionales en este PR)
     providers/
         __init__.py         # Jerarquía de error compartida entre dominios
@@ -37,7 +40,7 @@ tests/
     test_configuration_*.py       # 8 archivos
     test_logging_*.py             # 5 archivos
     test_runtime_*.py             # 8 archivos
-    test_services_*.py            # 2 archivos
+    test_services_*.py            # 3 archivos (incluye narration)
     test_providers_*.py           # 4 archivos
     test_no_direct_environ_access.py     # invariante ejecutable
 docs/
@@ -74,9 +77,9 @@ Primer dominio de Provider (ADR-0009: dominio propio, no un `Provider`
 genérico):
 
 - **`TextGenerationProvider`** — el único contrato que el resto del
-  sistema conocerá (un futuro `NarrationService`, ADR-0008, dependerá de
-  esto, nunca de una clase concreta). Síncrono, sin streaming
-  (deliberado — ver ADR-0009).
+  sistema conocerá (`NarrationService`, más abajo, depende de esto,
+  nunca de una clase concreta). Síncrono, sin streaming (deliberado —
+  ver ADR-0009).
 - **`Message`**, **`Role`** (`USER`/`ASSISTANT`), **`TextGenerationRequest`**
   (`messages`, `max_tokens`, `system`, `temperature`),
   **`TextGenerationResult`** (`text`, `stop_reason`, `input_tokens`,
@@ -92,6 +95,23 @@ genérico):
   `anthropic`. Requiere el extra opcional `velora[anthropic]` — no es
   una dependencia obligatoria de `velora`.
 
+### `velora.services.narration`
+
+El primer Service de capacidad (ADR-0008, ADR-0010):
+
+- **`NarrationService`** — envuelve un `TextGenerationProvider`
+  inyectado. `narrate(instructions: str, *, max_tokens=1024) ->
+  TextGenerationResult`. Deliberadamente delgado: no decide estructura
+  narrativa ni tono más allá de un system prompt genérico (eso
+  pertenece a un futuro Engine). No implementa `LifecycleComponent` — no
+  tiene recurso propio; el Provider inyectado gestiona el suyo. Rechaza
+  instrucciones vacías con `ValueError` (única precondición; no
+  justifica una jerarquía de error propia todavía).
+
+Vive en un subpaquete de `velora.services`, no en la raíz: importar
+`Clock`/`IdGenerator` nunca debe arrastrar `velora.providers` para quien
+no lo necesita.
+
 ## Dependencias entre componentes
 
 ```
@@ -102,19 +122,20 @@ velora.cli  →  velora.services
 velora.providers.text_generation  →  velora.runtime   (solo para LifecycleComponent)
 velora.providers.text_generation  →  velora.providers  (jerarquía de error)
 velora.providers.text_generation._anthropic  →  anthropic (extra opcional)
+velora.services.narration  →  velora.providers.text_generation
 ```
 
-`velora.providers` (raíz y dominios) no es consumido todavía por
-`velora.cli` ni por ningún Service — no hay Service de capacidad
-(ADR-0008) que lo use aún. Es infraestructura real, completa y probada,
-sin consumidor final todavía, igual que `Runtime` en PR-002 no tenía
-ningún `LifecycleComponent` concreto hasta este mismo PR.
+`velora.services` (raíz: `Clock`/`IdGenerator`) sigue sin depender de
+`velora.providers` — solo el subpaquete `velora.services.narration` lo
+hace, y únicamente para quien lo importe explícitamente. `velora.cli`
+todavía no construye ni usa `NarrationService` ni ningún Provider: no
+hay Engine ni Workflow que los necesite todavía.
 
 ## Lo que no existe todavía
 
-Engines, Workflows, Extensions. Tampoco existen Services de capacidad
-(`NarrationService`, etc. — ahora desbloqueados por este PR, ver
-ADR-0008) ni Providers de ningún otro dominio (voz, imagen, video,
-música, traducción). Cualquier mención a esas capas en otros documentos
-es planificación, no arquitectura vigente. Este documento se actualizará
-en cada PR que introduzca una capa o dominio nuevo.
+Engines, Workflows, Extensions. Tampoco existen Providers de ningún otro
+dominio (voz, imagen, video, música, traducción) ni más Services de
+capacidad (`ImageService`, etc.). Cualquier mención a esas capas en
+otros documentos es planificación, no arquitectura vigente. Este
+documento se actualizará en cada PR que introduzca una capa o dominio
+nuevo.

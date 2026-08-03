@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Providers — dominio `text_generation`** (PR-006). Ver
+**Fase: Services de capacidad — `NarrationService`** (PR-007). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -91,6 +91,19 @@ provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
 
 (En uso real, `start`/`stop` los invoca `Runtime`, no se llaman a mano —
 este ejemplo es solo para mostrar el contrato de forma aislada.)
+
+## Services de capacidad
+
+`NarrationService` es la primera capacidad construida sobre un
+Provider — el llamador nunca sabe cuál (`docs/VISION.md`):
+
+```python
+from velora.services.narration import NarrationService
+
+service = NarrationService(provider)  # cualquier TextGenerationProvider
+result = service.narrate("Describe a city at dawn, in two sentences.")
+print(result.text)
+```
 
 ## Desarrollo
 

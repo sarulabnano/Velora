@@ -1,15 +1,18 @@
-"""Velora Services: small, provider-agnostic, reusable capabilities.
+"""Velora Services: infrastructure and capability, provider-agnostic.
 
-Services sit between Configuration/Logging and Providers in the
-dependency layering (architecture.md original §4:
-``Providers → Services → Configuration → Logging → Runtime``). They may
-depend on any layer below them; nothing below them may depend on this
-package.
+ADR-0008 distinguishes two categories, both legitimately "Services"
+(``docs/VISION.md``: "representan capacidades del sistema, no
+representan APIs"), with different positions in the dependency layering:
 
-Not every Service implements
-:class:`~velora.runtime.LifecycleComponent`: it does only when it holds
-a real resource to open and close. Neither :class:`Clock` nor
-:class:`IdGenerator` do — see ADR-0007.
+- **Infrastructure Services** — this package's root (`Clock`,
+  `IdGenerator`). No dependency on `velora.providers`. Not every Service
+  implements :class:`~velora.runtime.LifecycleComponent`: it does only
+  when it holds a real resource to open and close. Neither `Clock` nor
+  `IdGenerator` do (ADR-0007).
+- **Capability Services** — their own subpackages (`narration`, ...).
+  Depend on `velora.providers` for the concrete work; deliberately kept
+  out of this root module so importing `Clock`/`IdGenerator` never pulls
+  in a Provider dependency for code that doesn't need one.
 """
 
 from __future__ import annotations
