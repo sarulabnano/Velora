@@ -15,6 +15,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40,<1"]
+
 [project.scripts]
 velora = "velora.cli:main"
 
@@ -31,6 +34,7 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8",
     "mypy>=1.13",
+    "anthropic>=0.40,<1",
 ]
 
 [tool.ruff]

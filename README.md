@@ -7,11 +7,10 @@ inicial.
 
 ## Estado actual
 
-**Fase: Services — infraestructura** (PR-005). Ver
+**Fase: Providers — dominio `text_generation`** (PR-006). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
-vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto
-(qué es Velora y para qué existe).
+vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
 
 ## Requisitos
 
@@ -56,6 +55,42 @@ del log con `VELORA_LOG_LEVEL` (`debug`, `info` por defecto, `warning`,
 ```bash
 VELORA_ENVIRONMENT=production VELORA_LOG_LEVEL=warning uv run velora
 ```
+
+## Providers
+
+Velora adapta APIs externas de IA detrás de contratos tipados por
+dominio (`docs/VISION.md`). El primer dominio es `text_generation`:
+
+```bash
+pip install 'velora[anthropic]'
+```
+
+```python
+from velora.providers.text_generation import (
+    AnthropicTextGenerationProvider,
+    Message,
+    Role,
+    TextGenerationRequest,
+)
+from velora.runtime import RuntimeContext
+from datetime import datetime, UTC
+
+provider = AnthropicTextGenerationProvider(api_key="sk-ant-...")
+provider.start(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+
+result = provider.generate(
+    TextGenerationRequest(
+        messages=[Message(role=Role.USER, content="Say hello in one word.")],
+        max_tokens=10,
+    )
+)
+print(result.text)
+
+provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+```
+
+(En uso real, `start`/`stop` los invoca `Runtime`, no se llaman a mano —
+este ejemplo es solo para mostrar el contrato de forma aislada.)
 
 ## Desarrollo
 
