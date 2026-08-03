@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from velora.runtime._clock import SystemClock
 from velora.runtime._context import RuntimeContext
 from velora.runtime._errors import (
     RuntimeAlreadyStartedError,
@@ -14,12 +13,15 @@ from velora.runtime._errors import (
     RuntimeShutdownError,
 )
 from velora.runtime._events import RuntimeEvent, RuntimeEventKind, RuntimeEventListener
+from velora.runtime._id_generator import UUIDIdGenerator
 from velora.runtime._state import RuntimeState
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
 
+    from velora.runtime._clock import Clock
+    from velora.runtime._id_generator import IdGenerator
     from velora.runtime._lifecycle import LifecycleComponent
 
 __all__ = ["Runtime"]
@@ -30,8 +32,9 @@ class Runtime:
 
     The Runtime knows nothing about Configuration, Logging, Providers,
     Engines, Workflows, or any other later-phase concept. It only knows
-    two contracts, both supplied by the caller through dependency
-    injection — never constructed internally:
+    four contracts, all supplied by the caller through dependency
+    injection — never constructed internally except as documented
+    defaults below:
 
     - ``components``: objects implementing
       :class:`~velora.runtime.LifecycleComponent`, started in the given
@@ -40,6 +43,17 @@ class Runtime:
       :class:`~velora.runtime.RuntimeEventListener`, notified of every
       lifecycle event. The Runtime never writes logs itself; a listener
       decides what, if anything, to do with an event.
+    - ``clock``: an object implementing :class:`~velora.runtime.Clock`,
+      used to timestamp the execution context. Defaults to
+      :class:`~velora.runtime.SystemClock` (real wall-clock time) when
+      not given — the only two dependencies the Runtime is permitted to
+      construct itself, because they are stateless and their default
+      behavior is exactly "use the real world."
+    - ``id_generator``: an object implementing
+      :class:`~velora.runtime.IdGenerator`, used to generate the
+      execution id. Defaults to
+      :class:`~velora.runtime.UUIDIdGenerator` when not given, for the
+      same reason.
 
     A ``Runtime`` instance is single-use: ``NOT_STARTED -> STARTING ->
     RUNNING -> STOPPING -> STOPPED``, with no transition back to
@@ -54,9 +68,16 @@ class Runtime:
         self,
         components: Sequence[LifecycleComponent] = (),
         listeners: Sequence[RuntimeEventListener] = (),
+        *,
+        clock: Clock | None = None,
+        id_generator: IdGenerator | None = None,
     ) -> None:
         self._components: tuple[LifecycleComponent, ...] = tuple(components)
         self._listeners: tuple[RuntimeEventListener, ...] = tuple(listeners)
+        self._clock: Clock = clock if clock is not None else SystemClock()
+        self._id_generator: IdGenerator = (
+            id_generator if id_generator is not None else UUIDIdGenerator()
+        )
         self._state: RuntimeState = RuntimeState.NOT_STARTED
         self._context: RuntimeContext | None = None
         self._started_components: list[LifecycleComponent] = []
@@ -96,7 +117,9 @@ class Runtime:
             )
 
         self._state = RuntimeState.STARTING
-        self._context = RuntimeContext(runtime_id=str(uuid4()), started_at=datetime.now(UTC))
+        self._context = RuntimeContext(
+            runtime_id=self._id_generator.new_id(), started_at=self._clock.now()
+        )
         self._emit(RuntimeEvent(kind=RuntimeEventKind.BOOTSTRAP_STARTING))
 
         for component in self._components:

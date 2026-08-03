@@ -2,10 +2,12 @@
 
 This entrypoint reports package metadata (`--version`, `--help`) and, by
 default, is the composition root: it resolves Configuration, configures
-Logging, then bootstraps the Runtime with Logging attached as a listener
-(ADR-0005, ADR-0006). Per ADR-0002, this module is extended across
-roadmap phases, never rewritten: `--version` and `--help` keep working
-exactly as they did in the Foundation phase.
+Logging, then bootstraps the Runtime with Logging attached as a
+listener and Services' `SystemClock`/`UUIDIdGenerator` injected in place
+of Runtime's own defaults (ADR-0005, ADR-0006, ADR-0007). Per ADR-0002,
+this module is extended across roadmap phases, never rewritten:
+`--version` and `--help` keep working exactly as they did in the
+Foundation phase.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from velora.configuration import VeloraConfigurationError, VeloraSettings, load_
 from velora.logging import LoggingSettings, RuntimeEventLogger, configure_logging
 from velora.logging import LogLevel as LoggingLogLevel
 from velora.runtime import Runtime, VeloraRuntimeError
+from velora.services import SystemClock, UUIDIdGenerator
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -53,7 +56,15 @@ def _translate_log_level(level: ConfigurationLogLevel) -> LoggingLogLevel:
 
 
 def _default_runtime_factory(listeners: Sequence[RuntimeEventListener]) -> Runtime:
-    return Runtime(listeners=listeners)
+    """Build the default Runtime, with Services' Clock/IdGenerator injected.
+
+    ``velora.services.SystemClock``/``UUIDIdGenerator`` satisfy
+    ``velora.runtime.Clock``/``IdGenerator`` structurally — neither
+    package imports the other (ADR-0007). Passing them here, rather than
+    relying on Runtime's own internal defaults, is the composition root
+    making that substitutability real rather than theoretical.
+    """
+    return Runtime(listeners=listeners, clock=SystemClock(), id_generator=UUIDIdGenerator())
 
 
 def main(

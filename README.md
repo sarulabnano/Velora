@@ -7,10 +7,11 @@ inicial.
 
 ## Estado actual
 
-**Fase: Logging** (PR-004). Ver
-[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado y
+**Fase: Services — infraestructura** (PR-005). Ver
+[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
-vigente.
+vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto
+(qué es Velora y para qué existe).
 
 ## Requisitos
 

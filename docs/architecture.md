@@ -2,13 +2,15 @@
 
 Este documento describe únicamente la arquitectura que existe hoy en el
 repositorio. No describe fases futuras del roadmap; esas se documentan en
-`PROJECT_CONTEXT.md` (estado) y en los ADR (decisiones).
+`PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
+los ADR (decisiones).
 
-## Estado: Logging
+## Estado: Services (infraestructura)
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
-**Configuration** (PR-003), **Logging** (PR-004).
-Fase siguiente: **Services** (PR-005).
+**Configuration** (PR-003), **Logging** (PR-004), **Services —
+infraestructura** (PR-005).
+Fase siguiente: **Providers** (PR-006).
 
 ## Estructura del repositorio
 
@@ -21,34 +23,42 @@ src/velora/
         __init__.py         # Superficie pública de velora.configuration
         _environment.py       # Environment
         _errors.py              # Jerarquía VeloraConfigurationError
-        _log_level.py             # LogLevel (propio de Configuration, ver ADR-0006)
+        _log_level.py             # LogLevel (propio de Configuration, ADR-0006)
         _parsing.py                # parse_enum — punto único de parseo tipado
         _settings.py                 # VeloraSettings
         _sources.py                   # ConfigSource, EnvironmentSource (único lugar con os.environ)
     logging/
         __init__.py         # Superficie pública de velora.logging
-        _level.py             # LogLevel (propio de Logging, ver ADR-0006)
+        _level.py             # LogLevel (propio de Logging, ADR-0006)
         _settings.py            # LoggingSettings
         _formatting.py            # format_event — total sobre RuntimeEventKind
         _listener.py                # RuntimeEventLogger (implementa RuntimeEventListener)
+    services/
+        __init__.py         # Superficie pública de velora.services
+        _clock.py             # Clock, SystemClock (propios, ADR-0007)
+        _id_generator.py        # IdGenerator, UUIDIdGenerator (propios, ADR-0007)
     runtime/
         __init__.py         # Superficie pública de velora.runtime
-        _context.py          # RuntimeContext
-        _errors.py             # Jerarquía VeloraRuntimeError
-        _events.py               # RuntimeEvent, RuntimeEventKind, RuntimeEventListener
-        _lifecycle.py               # Protocolo LifecycleComponent
-        _runtime.py                   # Clase Runtime
-        _state.py                      # RuntimeState
+        _clock.py             # Clock, SystemClock (propios de Runtime, ADR-0007)
+        _context.py            # RuntimeContext
+        _errors.py               # Jerarquía VeloraRuntimeError
+        _events.py                 # RuntimeEvent, RuntimeEventKind, RuntimeEventListener
+        _id_generator.py             # IdGenerator, UUIDIdGenerator (propios de Runtime, ADR-0007)
+        _lifecycle.py                   # Protocolo LifecycleComponent
+        _runtime.py                       # Clase Runtime
+        _state.py                          # RuntimeState
 tests/
     test_package_metadata.py
     test_cli.py
-    test_configuration_*.py       # 7 archivos, uno por módulo de Configuration
-    test_logging_*.py             # 5 archivos, uno por módulo de Logging
-    test_runtime_*.py             # 6 archivos, uno por módulo de Runtime
-    test_no_direct_environ_access.py     # invariante ejecutable, no solo documentada
+    test_configuration_*.py       # 8 archivos
+    test_logging_*.py             # 5 archivos
+    test_runtime_*.py             # 8 archivos
+    test_services_*.py            # 2 archivos
+    test_no_direct_environ_access.py     # invariante ejecutable
 docs/
     architecture.md               # Este documento
-    adr/                            # Registro de decisiones arquitectónicas
+    VISION.md                       # Visión de producto (incorporada en PR-005)
+    adr/                              # Registro de decisiones arquitectónicas
 PROJECT_CONTEXT.md                  # Estado actual del proyecto
 ```
 
@@ -56,103 +66,85 @@ PROJECT_CONTEXT.md                  # Estado actual del proyecto
 
 ### `velora` (paquete raíz)
 
-Expone una única variable pública: `__version__`, resuelta en tiempo de
-ejecución vía `importlib.metadata` (`__all__ = ["__version__"]`).
+Expone `__version__`, resuelto vía `importlib.metadata`.
 
 ### `velora.configuration`
 
-El único punto de entrada por el que la configuración se transforma en
-objetos tipados. Superficie pública:
-
-- **`load_settings(source=None)`** — con `source=None` usa
-  `EnvironmentSource` (variables de entorno reales).
-- **`VeloraSettings`** — dataclass congelado: `environment: Environment`,
-  `log_level: LogLevel`. Se construye únicamente vía
-  `VeloraSettings.from_source(...)`.
-- **`Environment`** — enum `DEVELOPMENT` / `STAGING` / `PRODUCTION`.
-- **`LogLevel`** — enum `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`,
-  propio de Configuration. Ver ADR-0006: no es el mismo tipo que
-  `velora.logging.LogLevel`, deliberadamente.
-- **`ConfigSource`** / **`EnvironmentSource`** — la única implementación,
-  y el único lugar de todo el código fuente donde se lee `os.environ`
-  (invariante verificada por `tests/test_no_direct_environ_access.py`).
-- **`VeloraConfigurationError`** y su jerarquía
-  (`MissingConfigurationValueError`, `InvalidConfigurationValueError`).
-
-`velora.configuration` no importa `velora.runtime`, `velora.logging` ni
-`velora.cli`. Es una hoja del grafo de dependencias (ADR-0005, ADR-0006).
+Único punto de entrada de configuración tipada: `load_settings`,
+`VeloraSettings` (`environment`, `log_level`), `Environment`, `LogLevel`
+(propio — ADR-0006), `ConfigSource`/`EnvironmentSource` (único lugar con
+`os.environ`, verificado por test), `VeloraConfigurationError` y su
+jerarquía. No importa `velora.runtime`, `velora.logging` ni
+`velora.services`.
 
 ### `velora.logging`
 
-El backend que decide cómo se registran los eventos del Runtime
-(architecture.md original §7). Superficie pública:
+Backend real de logging de eventos del Runtime: `configure_logging`,
+`RuntimeEventLogger` (implementa `RuntimeEventListener`
+estructuralmente, usa `logging.Logger` construido directamente — no
+`getLogger` — para no tocar el registro global), `LoggingSettings`,
+`LogLevel` (propio — ADR-0006). Importa `velora.runtime` (para
+`RuntimeEvent`/`RuntimeEventKind`). No importa `velora.configuration`.
 
-- **`configure_logging(settings, *, stream=None, name="velora")`** —
-  construye un `RuntimeEventLogger`. `stream` por defecto es
-  `sys.stderr`, leído en el momento de la llamada.
-- **`RuntimeEventLogger`** — implementa `RuntimeEventListener`
-  *estructuralmente* (no importa `velora.runtime.RuntimeEventListener`
-  para heredar de él, solo para tipar). Usa `logging.Logger(name, ...)`
-  construido directamente — no `logging.getLogger(name)` — para no tocar
-  el registro global de la stdlib ("No Singletons Globales"). Eventos
-  `FATAL_ERROR` se registran a nivel `ERROR`; el resto, a nivel `INFO`.
-  No captura excepciones de la llamada a `logging` subyacente (ADR-0004:
-  un fallo ahí no es "operación normal").
-- **`LoggingSettings`** — dataclass congelado: `level: LogLevel`.
-- **`LogLevel`** — propio de Logging, con `to_stdlib_level() -> int`. No
-  es el mismo tipo que `velora.configuration.LogLevel` (ADR-0006).
+### `velora.services`
 
-`velora.logging` importa `velora.runtime` (para los tipos `RuntimeEvent`,
-`RuntimeEventKind` que consume) — dependencia hacia abajo, permitida por
-el diagrama de capas. No importa `velora.configuration` (ADR-0006) ni
-`velora.cli`. `velora.runtime` nunca importa `velora.logging`.
+Services de infraestructura (ADR-0008 distingue esta categoría de los
+Services de capacidad, que todavía no existen):
 
-**Nota:** `import logging` dentro de los módulos de este paquete resuelve
-al módulo estándar de Python, no a sí mismo — Python 3 usa imports
-absolutos por defecto y este paquete nunca es una entrada de nivel
-superior en `sys.path`. Verificado empíricamente antes de asumirlo.
+- **`Clock`** / **`SystemClock`** — abstracción de "la hora actual".
+- **`IdGenerator`** / **`UUIDIdGenerator`** — abstracción de "generar un
+  identificador único".
+
+Ninguno de los dos implementa `LifecycleComponent`: no tienen ningún
+recurso que abrir o cerrar (ver ADR-0007). No importan
+`velora.runtime`, `velora.configuration` ni `velora.logging` — son hoja
+del grafo de dependencias, y satisfacen estructuralmente (PEP 544) los
+protocolos homónimos que `velora.runtime` define por su cuenta.
 
 ### `velora.runtime`
 
-El núcleo estable del sistema (architecture.md original §5). Superficie
-pública, deliberadamente pequeña:
+El núcleo estable del sistema. Superficie pública:
 
 - **`Runtime`** — bootstrap, lifecycle, apagado ordenado. Instancia de un
-  solo uso: `NOT_STARTED → STARTING → RUNNING → STOPPING → STOPPED`, con
-  transición a `FAILED` si un componente falla al iniciar o detenerse.
-  Ver ADR-0003.
+  solo uso. Ver ADR-0003. Desde PR-005, acepta `clock: Clock | None` e
+  `id_generator: IdGenerator | None` inyectables; si no se dan, usa
+  internamente `SystemClock()`/`UUIDIdGenerator()` — la única excepción
+  documentada a "las dependencias se inyectan, nunca se crean dentro de
+  las clases", justificada porque ambos defaults son deterministas, sin
+  estado, y su comportamiento por defecto es literalmente "usar el mundo
+  real" (ADR-0007).
 - **`RuntimeState`**, **`RuntimeContext`**.
+- **`Clock`** / **`SystemClock`**, **`IdGenerator`** / **`UUIDIdGenerator`**
+  — protocolos e implementaciones **propios** de Runtime, no importados
+  de `velora.services` (Runtime no puede depender de Services — Services
+  está por encima en la capa). `velora.services.SystemClock` los
+  satisface estructuralmente sin ningún import cruzado.
 - **`LifecycleComponent`** — el único contrato por el que el Runtime
-  conoce a un componente. Ni `Configuration` ni `Logging` lo implementan
-  (ver ADR-0005): ninguno de los dos es un recurso con arranque/parada.
+  conoce a un componente. Ni `Configuration`, ni `Logging`, ni los
+  Services de infraestructura actuales lo implementan.
 - **`RuntimeEvent`** / **`RuntimeEventKind`** / **`RuntimeEventListener`**
-  — ver ADR-0004. `RuntimeEventLogger` (Logging) es hoy el único
-  listener real.
+  — ver ADR-0004.
 - **`VeloraRuntimeError`** y su jerarquía.
 
-El Runtime no importa ni conoce Configuration, Logging, Providers,
-Engines, Workflows ni Extensions — solo los protocolos
-`LifecycleComponent` y `RuntimeEventListener`.
+El Runtime no importa ni conoce Configuration, Logging, Services,
+Providers, Engines, Workflows ni Extensions — solo sus propios
+protocolos (`LifecycleComponent`, `RuntimeEventListener`, `Clock`,
+`IdGenerator`).
 
 ### `velora.cli`
 
-Entrypoint de consola registrado como `velora`
-(`[project.scripts]`). Soporta `--version` y `--help` (sin cambios desde
-Foundation, ADR-0002). Es el **composition root** (ADR-0005, ADR-0006):
+Composition root (ADR-0005, ADR-0006, ADR-0007):
 
-1. Resuelve `VeloraSettings` (vía `settings_loader` inyectable). Si
-   falla, imprime a `stderr` y sale con código 1 — nada más se construye.
-2. Traduce `settings.log_level` (Configuration) a `LoggingLogLevel`
-   (Logging) por nombre (`_translate_log_level`), y configura
-   `RuntimeEventLogger` (vía `logging_factory` inyectable).
-3. Construye `Runtime` con el logger como único listener (vía
-   `runtime_factory` inyectable) y lo ejecuta como context manager,
-   reportando `runtime_id` y `environment` a `stdout`.
-4. Si el Runtime falla, imprime a `stderr` y sale con código 1 — además
-   de lo que `RuntimeEventLogger` ya haya registrado de forma
-   independiente (el mensaje de `stderr` es la garantía visible siempre,
-   sin importar el nivel de log configurado; el registro estructurado es
-   el detalle, sujeto a `VELORA_LOG_LEVEL`).
+1. Resuelve `VeloraSettings`. Si falla, reporta a `stderr` y sale con 1.
+2. Traduce `settings.log_level` a `LoggingLogLevel` y configura
+   `RuntimeEventLogger`.
+3. Construye `Runtime` con el logger como listener y con
+   `velora.services.SystemClock()`/`UUIDIdGenerator()` inyectados
+   explícitamente en lugar de los defaults internos de `Runtime` —
+   haciendo real, no solo teórica, la sustitución estructural.
+4. Ejecuta el Runtime como context manager, reportando `runtime_id` y
+   `environment`. Un fallo se reporta a `stderr` con código 1, además de
+   lo que `RuntimeEventLogger` ya haya registrado.
 
 ## Dependencias entre componentes
 
@@ -160,15 +152,19 @@ Foundation, ADR-0002). Es el **composition root** (ADR-0005, ADR-0006):
 velora.cli  →  velora.runtime
 velora.cli  →  velora.configuration
 velora.cli  →  velora.logging  →  velora.runtime
+velora.cli  →  velora.services
 ```
 
-`velora.configuration` y `velora.logging` no se importan entre sí
-(ADR-0006). Ninguno de los tres subpaquetes importa `velora.cli`. No hay
-dependencias externas de terceros en `dependencies` de `pyproject.toml`.
+`velora.services` no importa `velora.runtime`, `velora.configuration` ni
+`velora.logging` — sus tipos satisfacen los protocolos de `velora.runtime`
+únicamente por estructura (ADR-0007). `velora.configuration` y
+`velora.logging` no se importan entre sí (ADR-0006). Ningún subpaquete
+importa `velora.cli`. No hay dependencias externas de terceros.
 
 ## Lo que no existe todavía
 
-Services, Providers, Engines, Workflows y Extensions no existen en el
-repositorio. Cualquier mención a esas capas en otros documentos
-(`PROJECT_CONTEXT.md`, ADR) es planificación, no arquitectura vigente.
+Providers, Engines, Workflows, Extensions. Tampoco existen Services de
+capacidad (`NarrationService`, `ImageService`, etc.) — dependen de que
+exista al menos un Provider real (ADR-0008). Cualquier mención a esas
+capas en otros documentos es planificación, no arquitectura vigente.
 Este documento se actualizará en cada PR que introduzca una capa nueva.

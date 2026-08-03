@@ -70,6 +70,18 @@ def test_main_bootstraps_and_stops_the_injected_runtime() -> None:
     assert runtime.state is RuntimeState.STOPPED
 
 
+def test_default_runtime_factory_produces_a_real_runtime_id(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The default runtime_factory injects Services' Clock/IdGenerator
+    (ADR-0007); this checks the observable result end to end, through
+    the same real defaults `velora` uses on the command line."""
+    main([], settings_loader=_settings_loader)
+
+    captured = capsys.readouterr()
+    assert "running (development)" in captured.out
+
+
 def test_main_passes_configured_logger_to_runtime_factory() -> None:
     received: list[Sequence[RuntimeEventListener]] = []
 

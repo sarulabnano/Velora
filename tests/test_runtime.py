@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from uuid import UUID
+
 import pytest
 
 from velora.runtime import (
@@ -96,6 +99,53 @@ def test_stop_after_start_reaches_stopped() -> None:
     runtime.stop()
 
     assert runtime.state is RuntimeState.STOPPED
+
+
+# --- clock / id_generator injection --------------------------------------
+
+
+class _FixedClock:
+    def __init__(self, value: datetime) -> None:
+        self._value = value
+
+    def now(self) -> datetime:
+        return self._value
+
+
+class _SequentialIdGenerator:
+    def __init__(self, ids: list[str]) -> None:
+        self._ids = iter(ids)
+
+    def new_id(self) -> str:
+        return next(self._ids)
+
+
+def test_default_clock_and_id_generator_produce_real_values() -> None:
+    before = datetime.now(UTC)
+    runtime = Runtime()
+
+    runtime.start()
+
+    after = datetime.now(UTC)
+    UUID(runtime.context.runtime_id, version=4)  # does not raise
+    assert before <= runtime.context.started_at <= after
+
+
+def test_injected_clock_determines_started_at() -> None:
+    fixed_instant = datetime(2030, 1, 1, tzinfo=UTC)
+    runtime = Runtime(clock=_FixedClock(fixed_instant))
+
+    runtime.start()
+
+    assert runtime.context.started_at == fixed_instant
+
+
+def test_injected_id_generator_determines_runtime_id() -> None:
+    runtime = Runtime(id_generator=_SequentialIdGenerator(["fixed-id-1"]))
+
+    runtime.start()
+
+    assert runtime.context.runtime_id == "fixed-id-1"
 
 
 def test_components_are_started_in_order_and_receive_context() -> None:

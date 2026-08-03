@@ -1,15 +1,17 @@
 # PROJECT_CONTEXT
 
-Este documento resume el estado actual de Velora. No duplica los ADR; los
-referencia.
+Este documento resume el estado actual de Velora. No duplica los ADR ni
+`docs/VISION.md`; los referencia.
 
 ## Último PR
 
-**PR-004 — Logging.**
+**PR-005 — Services (infraestructura).**
 
 ## Milestone activa
 
-**Logging** (completada). Próxima: **Services** (PR-005).
+**Services** (completada — solo Services de infraestructura; los
+Services de capacidad esperan a Providers, ver ADR-0008). Próxima:
+**Providers** (PR-006).
 
 ## Roadmap (congelado, no modificable)
 
@@ -18,54 +20,77 @@ Foundation → Runtime → Configuration → Logging → Services →
 Providers → Engines → Workflows → Extensions
 ```
 
+## Documento de visión
+
+`docs/VISION.md` — visión de producto: Velora como plataforma de
+automatización de producción audiovisual con IA. Incorporado en PR-005.
+Es la fuente de verdad del dominio; no es vinculante arquitectónicamente
+por sí solo — las discrepancias con lo construido se resuelven vía ADR
+(ver ADR-0008, la primera).
+
 ## Componentes que existen hoy
 
 - `velora` — paquete raíz, expone `__version__`.
 - `velora.cli` — entrypoint de consola `velora`, composition root; por
-  defecto resuelve `Configuration`, configura `Logging` a partir de ella,
-  bootstrapea el Runtime con el logger como listener, y reporta
-  `runtime_id` y `environment`.
+  defecto resuelve `Configuration`, configura `Logging`, construye
+  `Runtime` inyectando `SystemClock`/`UUIDIdGenerator` de
+  `velora.services`, y reporta `runtime_id` y `environment`.
 - `velora.runtime` — núcleo estable: `Runtime`, `RuntimeState`,
   `RuntimeContext`, `LifecycleComponent`, `RuntimeEvent`,
-  `RuntimeEventKind`, `RuntimeEventListener`, `VeloraRuntimeError` y su
+  `RuntimeEventKind`, `RuntimeEventListener`, `Clock`, `SystemClock`,
+  `IdGenerator`, `UUIDIdGenerator` (estos dos últimos con default interno
+  si no se inyectan — la única excepción documentada a "nunca se crean
+  dentro de las clases", ver ADR-0007), `VeloraRuntimeError` y su
   jerarquía.
 - `velora.configuration` — único punto de entrada de configuración
   tipada: `load_settings`, `VeloraSettings`, `Environment`, `LogLevel`,
   `ConfigSource`, `EnvironmentSource`, `VeloraConfigurationError` y su
-  jerarquía. No depende de `velora.runtime` ni de `velora.logging`.
+  jerarquía.
 - `velora.logging` — backend de logging real: `configure_logging`,
-  `RuntimeEventLogger` (implementa `RuntimeEventListener`),
-  `LoggingSettings`, `LogLevel` (propio, distinto del de Configuration —
-  ADR-0006). No depende de `velora.configuration`.
+  `RuntimeEventLogger`, `LoggingSettings`, `LogLevel` (propio).
+- `velora.services` — Services de infraestructura: `Clock`/`SystemClock`,
+  `IdGenerator`/`UUIDIdGenerator`. Satisfacen estructuralmente los
+  protocolos homónimos de `velora.runtime` sin ningún import cruzado
+  (ADR-0007). No dependen de `velora.configuration`, `velora.logging` ni
+  `velora.runtime`.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Componentes que NO existen todavía
 
-Services, Providers, Engines, Workflows, Extensions.
+Providers, Engines, Workflows, Extensions. Tampoco existen Services de
+capacidad (`NarrationService`, `ImageService`, etc. — ver ADR-0008):
+esperan a que exista al menos un Provider real que los respalde.
 
 ## Decisiones vigentes (ADR)
 
 - **ADR-0001** — `Configuration` no depende de `Logging` en tiempo de
-  import; produce errores tipados, nunca logging directo. Refinada por
-  ADR-0005.
+  import. Refinada por ADR-0005.
 - **ADR-0002** — El entrypoint CLI es funcionalidad real y permanente,
   extendido en cada fase, nunca reemplazado.
 - **ADR-0003** — Máquina de estados del Runtime, instancia de un solo
   uso, arranque fail-fast-con-unwind, parada exhaustiva.
 - **ADR-0004** — `RuntimeEvent` como dataclass plano + enum. Excepciones
-  de listeners no se capturan. `RuntimeEventLogger` (Logging) cumple
-  "en la práctica total" vía `match` exhaustivo + `assert_never`.
+  de listeners no se capturan.
 - **ADR-0005** — La "Runtime" que conecta Configuration y Logging es el
   composition root (`velora.cli.main`), no la clase `Runtime`.
   `Configuration` no implementa `LifecycleComponent`.
 - **ADR-0006** — `LogLevel` existe por duplicado, independiente, en
-  `velora.configuration` y `velora.logging` — ninguno importa al otro
-  (Logging no puede depender de Configuration por dirección de capas;
-  Configuration no puede depender de Logging por ADR-0001). El
-  composition root traduce entre ambos por nombre de miembro. Vinculante
-  para cualquier tipo futuro que dos capas no adyacentes-por-import
-  necesiten compartir.
+  `velora.configuration` y `velora.logging` — ninguno importa al otro.
+- **ADR-0007** — `Runtime` gana `clock`/`id_generator` inyectables
+  (protocolos propios, `SystemClock`/`UUIDIdGenerator` como default
+  interno — única excepción documentada a "nunca crear dependencias
+  dentro de la clase", justificada por ser deterministas/sin estado).
+  `velora.services` provee implementaciones que los satisfacen
+  estructuralmente sin importar `velora.runtime`. El composition root
+  inyecta explícitamente las de Services, demostrando la sustitución
+  real, no solo teórica.
+- **ADR-0008** — Resuelve la contradicción entre AGENT.md original
+  (`Providers → Services`) y `docs/VISION.md` (`Services → Providers`):
+  se adopta la dirección de VISION.md. Establece dos categorías de
+  Service (infraestructura vs. capacidad) y el diagrama de capas
+  canónico vigente, que integra ambos documentos. Vinculante para
+  PR-006 (Providers) y para cualquier Service de capacidad futuro.
 
 ## Criterios de aceptación vigentes
 
@@ -79,32 +104,24 @@ uv run pytest
 ```
 
 Todo debe ejecutarse sin errores. `pytest` debe invocarse a través del
-entorno gestionado por `uv` (`uv run pytest`, o con `.venv` activado);
-un `pytest` resuelto fuera de ese entorno no tendrá instalado
-`pytest-cov` y fallará por flags de cobertura no reconocidos. El Core
-(actualmente: `velora`, `velora.cli`, `velora.runtime`,
-`velora.configuration`, `velora.logging`) mantiene cobertura de pruebas
-≥90% como gate de aceptación, no como meta aspiracional; PR-004 cierra
-con 100%.
+entorno gestionado por `uv` (`uv run pytest`, o con `.venv` activado).
+El Core (`velora`, `velora.cli`, `velora.runtime`, `velora.configuration`,
+`velora.logging`, `velora.services`) mantiene cobertura de pruebas ≥90%
+como gate de aceptación; PR-005 cierra con 100%.
 
 `os.environ` solo puede leerse en
 `src/velora/configuration/_sources.py`; verificado por
-`tests/test_no_direct_environ_access.py`, no solo documentado.
-
-`VELORA_LOG_LEVEL` controla la verbosidad del logging real
-(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`, por defecto `INFO`); los
-eventos del Runtime se registran en `stderr`.
+`tests/test_no_direct_environ_access.py`.
 
 ## Próximo paso
 
-**PR-005 — Services.** Es la primera fase que se sitúa por encima de
-`Configuration` en el diagrama de capas
-(`Providers → Services → Configuration → Logging → Runtime`), así que
-puede depender de `Configuration` libremente (dirección permitida). Debe
-decidir explícitamente si un Service es o no un `LifecycleComponent`
-(muchos Services sí tendrán recursos reales que abrir/cerrar — conexiones
-a bases de datos, colas, clientes HTTP persistentes — a diferencia de
-Configuration y Logging, que no los tenían). El cableado de cualquier
-Service concreto en el composition root sigue el mismo patrón que
-Configuration y Logging: construido explícitamente en `velora.cli.main`,
-nunca instanciado dentro de `Runtime`.
+**PR-006 — Providers.** Primer PR con dependencias externas reales
+(SDKs de OpenAI, Anthropic, etc. — ver `docs/VISION.md`). Debe: (a)
+definir contratos tipados por dominio (texto/IA, voz, imagen, video,
+música, traducción — no un `Provider` genérico único, dado que cada
+dominio tiene una forma de entrada/salida distinta); (b) los Providers
+"nunca contienen lógica de negocio" (VISION.md) — son adaptadores puros;
+(c) evaluar si un Provider concreto necesita `LifecycleComponent` (p. ej.
+un cliente HTTP con conexión persistente sí; una llamada stateless no).
+Tras PR-006, el primer Service de capacidad (probablemente
+`NarrationService`, ver ADR-0008) queda habilitado para un PR posterior.
