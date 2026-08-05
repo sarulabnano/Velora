@@ -5,15 +5,16 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Workflows — `StoryWorkflow` y `velora create story`
+## Estado: Providers — dominio `voice` (ElevenLabs)
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
 infraestructura** (PR-005), **Providers — text_generation** (PR-006),
 **Services — capacidad: NarrationService** (PR-007), **Engines —
-StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009).
-Fase siguiente: a decidir — más Workflows, más Engines, o más dominios
-de Providers/Services.
+StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009),
+**Providers — dominio voice** (PR-010).
+Fase siguiente: a decidir — más Engines/Workflows sobre `voice`, o más
+dominios de Providers/Services.
 
 ## Estructura del repositorio
 
@@ -35,6 +36,11 @@ src/velora/
             _types.py             # Role, Message, TextGenerationRequest/Result
             _protocol.py            # TextGenerationProvider
             _anthropic.py             # AnthropicTextGenerationProvider (real, requiere extra)
+        voice/
+            __init__.py         # Superficie pública del dominio
+            _types.py             # SpeechRequest, SpeechResult
+            _protocol.py            # VoiceProvider
+            _elevenlabs.py            # ElevenLabsVoiceProvider (real, requiere extra)
     engines/
         __init__.py         # Namespace, sin lógica compartida todavía
         story/
@@ -53,7 +59,7 @@ tests/
     test_logging_*.py             # 5 archivos
     test_runtime_*.py             # 8 archivos
     test_services_*.py            # 3 archivos (incluye narration)
-    test_providers_*.py           # 4 archivos
+    test_providers_*.py           # 4 archivos (más 3 de voice)
     test_engines_*.py             # 2 archivos
     test_workflows_*.py           # 1 archivo
     test_no_direct_environ_access.py     # invariante ejecutable
@@ -108,6 +114,29 @@ genérico):
   quien llama a `generate()` nunca ve un tipo de excepción de
   `anthropic`. Requiere el extra opcional `velora[anthropic]` — no es
   una dependencia obligatoria de `velora`.
+
+### `velora.providers.voice`
+
+Segundo dominio de Provider (ADR-0013), mismo patrón que
+`text_generation` (ADR-0009):
+
+- **`VoiceProvider`** — el único contrato que el resto del sistema
+  conocerá. Síncrono, sin streaming, misma razón que `text_generation`.
+- **`SpeechRequest`** (`text`) — deliberadamente mínimo, un solo campo;
+  la elección de voz vive en el Provider (constructor), no en el
+  request. **`SpeechResult`** (`audio: bytes`, `audio_format: str`) —
+  `audio_format` es un `str` plano, no un enum: solo existe un valor
+  real (`"mp3"`) hasta que un segundo Provider produzca otro.
+- **`ElevenLabsVoiceProvider`** — primera implementación real.
+  Implementa `~velora.runtime.LifecycleComponent`: `start()` construye
+  su propio `httpx.Client` y se lo inyecta al SDK; `stop()` lo cierra —
+  evita depender de la estructura interna del SDK para el cierre. El SDK
+  de `elevenlabs` no distingue clases de excepción por código HTTP más
+  allá de 422 (`UnprocessableEntityError`); `synthesize()` inspecciona
+  `status_code` en la `ApiError` genérica para distinguir 401/429/otros,
+  y captura `httpx.HTTPError` por separado para fallos de conexión (el
+  SDK no los envuelve). Requiere el extra opcional `velora[elevenlabs]`
+  — independiente de `velora[anthropic]`.
 
 ### `velora.services.narration`
 
@@ -190,6 +219,9 @@ velora.cli  →  velora.providers.text_generation  (solo dentro de `create story
 velora.providers.text_generation  →  velora.runtime   (solo para LifecycleComponent)
 velora.providers.text_generation  →  velora.providers  (jerarquía de error)
 velora.providers.text_generation._anthropic  →  anthropic (extra opcional)
+velora.providers.voice  →  velora.runtime   (solo para LifecycleComponent)
+velora.providers.voice  →  velora.providers  (jerarquía de error)
+velora.providers.voice._elevenlabs  →  elevenlabs, httpx (extra opcional)
 velora.services.narration  →  velora.providers.text_generation
 velora.engines.story  →  velora.services.narration
 velora.workflows.story  →  velora.engines.story
@@ -205,14 +237,19 @@ ejecución de `create story` — sus imports de `velora.workflows.story` y
 de `velora.providers.text_generation` están diferidos dentro de las
 funciones que los usan, no a nivel de módulo (ADR-0012), precisamente
 para que el resto de comandos de la CLI —y el propio `import velora.cli`—
-nunca dependan del extra `velora[anthropic]`.
+nunca dependan del extra `velora[anthropic]`. `velora.providers.voice`
+no tiene todavía ningún consumidor real dentro del código base —
+`NarrationService`, `StoryEngine` y `StoryWorkflow` no lo conocen; queda
+disponible como dominio de Provider completo, a la espera de un Service
+o Engine real que lo use (ADR-0013).
 
 ## Lo que no existe todavía
 
-Extensions. Tampoco existen Providers de ningún otro dominio (voz,
-imagen, video, música, traducción), más Services de capacidad
-(`ImageService`, etc.), más Engines (Subtitle, Timeline, Render, Publish
-— ver `docs/VISION.md`), ni más Workflows que `StoryWorkflow`. Cualquier
-mención a esas capas en otros documentos es planificación, no
+Extensions. Tampoco existen Providers de ningún otro dominio (imagen,
+video, música, traducción), más Services de capacidad (`ImageService`,
+`VoiceService`, etc.), más Engines (Subtitle, Timeline, Render, Publish
+— ver `docs/VISION.md`), ni más Workflows que `StoryWorkflow`. Ningún
+Service/Engine/Workflow consume todavía `velora.providers.voice`.
+Cualquier mención a esas capas en otros documentos es planificación, no
 arquitectura vigente. Este documento se actualizará en cada PR que
 introduzca una capa o dominio nuevo.

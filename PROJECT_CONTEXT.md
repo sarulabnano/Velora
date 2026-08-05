@@ -5,12 +5,13 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-009 — Workflows: StoryWorkflow + `velora create story`.**
+**PR-010 — Providers: dominio `voice`, respaldado por ElevenLabs.**
 
 ## Milestone activa
 
-**Workflows** (primer Workflow completado: `StoryWorkflow`, sobre
-`StoryEngine`). Próxima: por decidir contigo — ver "Próximo paso".
+**Providers** (segundo dominio completado: `voice`, sobre
+`ElevenLabsVoiceProvider`). Próxima: por decidir contigo — ver "Próximo
+paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -27,51 +28,47 @@ Discrepancias con lo construido se resuelven vía ADR.
 ## Componentes que existen hoy
 
 - `velora` — paquete raíz, expone `__version__`.
-- `velora.cli` — composition root: Configuration → Logging → Runtime
-  (con Services de infraestructura inyectado). **Nuevo en este PR**:
-  primer subcomando real, `velora create story --topic TOPIC
-  [--max-tokens N]`, que ejecuta `StoryWorkflow` de principio a fin.
-  Requiere `VELORA_ANTHROPIC_API_KEY`. El smoke-run por defecto,
-  `--version` y `--help` no cambian.
+- `velora.cli` — sin cambios en este PR.
 - `velora.runtime` — sin cambios funcionales en este PR.
-- `velora.configuration` — **nuevo en este PR**: `VeloraSettings` gana
-  `anthropic_api_key: str | None` (de `VELORA_ANTHROPIC_API_KEY`),
-  opcional, sin validar en `from_source()` — se valida en el punto de
-  uso (`velora create story`).
+- `velora.configuration` — sin cambios en este PR.
 - `velora.logging` — sin cambios funcionales en este PR.
 - `velora.services` (raíz) — Services de infraestructura, sin cambios.
 - `velora.services.narration` — `NarrationService`, sin cambios.
-- `velora.providers`, `velora.providers.text_generation` — sin cambios.
+- `velora.providers` (raíz) — sin cambios.
+- `velora.providers.text_generation` — sin cambios.
+- `velora.providers.voice` — **nuevo**: `VoiceProvider`
+  (`synthesize(request: SpeechRequest) -> SpeechResult`),
+  `SpeechRequest` (`text`), `SpeechResult` (`audio: bytes`,
+  `audio_format: str`), `ElevenLabsVoiceProvider` (primera
+  implementación real, requiere el extra `velora[elevenlabs]`). Sin
+  consumidor todavía dentro del código base.
 - `velora.engines.story` — sin cambios.
-- `velora.workflows.story` — **nuevo**: `StoryWorkflow`
-  (`run(topic, *, max_tokens=1024) -> Story`). Envuelve un `StoryEngine`
-  inyectado; delega directamente, reutiliza `Story` como resultado.
+- `velora.workflows.story` — sin cambios.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Componentes que NO existen todavía
 
-Extensions. Tampoco Providers de voz, imagen, video, música o
-traducción, más Services de capacidad, más Engines (Subtitle, Timeline,
-Render, Publish), ni más Workflows que `StoryWorkflow`.
+Extensions. Tampoco Providers de imagen, video, música o traducción,
+más Services de capacidad (incluido un `VoiceService` que consuma
+`velora.providers.voice`), más Engines (Subtitle, Timeline, Render,
+Publish), ni más Workflows que `StoryWorkflow`.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0011** — ver PRs anteriores; sin cambios.
-- **ADR-0012** — `StoryWorkflow` es un envoltorio delgado de un solo
-  Engine, mismo patrón que ADR-0010 aplicó a `NarrationService`: se
-  construye ahora para desbloquear `velora.cli`, antes de que exista un
-  segundo Engine que coordinar. `velora create story` construye toda la
-  cadena (Provider → NarrationService → StoryEngine → StoryWorkflow) en
-  el composition root; el Provider es el único `LifecycleComponent` de
-  un `Runtime` propio, separado del que usa el smoke-run por defecto —
-  `runtime_factory` no se toca. Los imports de `anthropic`,
-  `NarrationService`, `StoryEngine` y `StoryWorkflow` están diferidos
-  dentro de las funciones que los usan: importar `velora.cli`, o correr
-  cualquier comando distinto de `create story`, nunca requiere el extra
-  `velora[anthropic]`. Vinculante para todo Workflow futuro: subpaquete
-  propio de `velora.workflows`, Engine(s) inyectados, subcomando aditivo
-  bajo `create`.
+- **ADR-0001** a **ADR-0012** — ver PRs anteriores; sin cambios.
+- **ADR-0013** — `velora.providers.voice`, segundo dominio de Provider,
+  mismo patrón que ADR-0009 estableció para `text_generation`.
+  `SpeechRequest` deliberadamente mínimo (un solo campo, `text`); la
+  voz se elige en el Provider (constructor), no en el request, hasta
+  que un llamador real necesite variarla entre llamadas.
+  `ElevenLabsVoiceProvider` inyecta su propio `httpx.Client` en el SDK
+  en vez de depender de su estructura interna para cerrarlo. El SDK de
+  `elevenlabs` no distingue clases de excepción por código HTTP más
+  allá de 422 — el mapeo de errores inspecciona `status_code`
+  explícitamente en vez de inventar tipos que el SDK no distingue.
+  Vinculante para todo Provider futuro: investigar el mapeo de errores
+  del SDK real elegido, nunca copiarlo mecánicamente de otro dominio.
 
 ## Criterios de aceptación vigentes
 
@@ -84,27 +81,30 @@ uv run velora
 uv run pytest
 ```
 
-Sin cambios respecto a PR-008. El Core mantiene cobertura de pruebas
-≥90%; PR-009 cierra con 100%. `uv run velora create story --topic "..."`
-requiere además `VELORA_ANTHROPIC_API_KEY` en el entorno.
+Sin cambios respecto a PR-009. El Core mantiene cobertura de pruebas
+≥90%; PR-010 cierra con 100%. `velora.providers.voice` no tiene
+consumidor en la CLI todavía — no hay comando `velora create ...` nuevo
+en este PR.
 
 ## Próximo paso
 
-Con `StoryWorkflow` funcionando y `velora create story` operativo de
-principio a fin, hay varios caminos razonables — necesito tu decisión
-antes de `Genera PR-010`:
+Con `velora.providers.voice` funcionando (sin consumidor todavía), hay
+varios caminos razonables — necesito tu decisión antes de `Genera
+PR-011`:
 
-1. **Segundo dominio de Providers/Service de capacidad** (voz o imagen)
-   — amplía cobertura horizontal; no añade un segundo Engine todavía.
-2. **Un segundo Engine** (Subtitle Engine, sobre el primer dominio de
-   voz que exista) — la primera vez que `StoryWorkflow` tendría más de
-   un Engine real que coordinar, revelando si su forma actual (delgada,
-   de un solo paso) sigue siendo la correcta o necesita crecer.
-3. **Un segundo Workflow** sobre lo que ya existe — más difícil de
-   justificar todavía: no hay un segundo Engine real que un segundo
-   Workflow pudiera componer de forma distinta a `StoryWorkflow`.
+1. **`VoiceService`** (`velora.services.voice`), sobre
+   `VoiceProvider` — capacidad de "hablar", envolviendo un
+   `VoiceProvider` inyectado. Mismo patrón que `NarrationService`
+   (ADR-0010).
+2. **Segundo Engine, sobre voz**: por ejemplo, extender
+   `StoryWorkflow`/un nuevo Engine para que la narración de una `Story`
+   también se sintetice a audio — la primera vez que `StoryWorkflow`
+   coordinaría más de un Engine real.
+3. **Tercer dominio de Provider** (imagen) antes de construir sobre
+   `voice` — sigue ampliando cobertura horizontal.
 
-Mi inclinación, si preguntas: opción 1 (voz o imagen) — es la que más
-directamente desbloquea un segundo Engine real después, y evita
-construir un segundo Workflow o un segundo Engine antes de tener con qué
-llenarlo de contenido genuinamente distinto. Pero es tu llamada.
+Mi inclinación, si preguntas: opción 1 (`VoiceService`) — es el paso
+intermedio que ADR-0010 ya demostró que vale la pena dar antes de un
+Engine: una capa delgada que desbloquea a quien la use después
+(`StoryWorkflow`, un futuro `NarrationAudioEngine`) sin comprometerse
+todavía a una decisión de orquestación mayor. Pero es tu llamada.

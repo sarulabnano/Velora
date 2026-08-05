@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Workflows — `StoryWorkflow`** (PR-009). Ver
+**Fase: Providers — dominio `voice`** (PR-010). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -91,6 +91,30 @@ provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
 
 (En uso real, `start`/`stop` los invoca `Runtime`, no se llaman a mano —
 este ejemplo es solo para mostrar el contrato de forma aislada.)
+
+Segundo dominio: `voice`, respaldado por ElevenLabs:
+
+```bash
+pip install 'velora[elevenlabs]'
+```
+
+```python
+from velora.providers.voice import ElevenLabsVoiceProvider, SpeechRequest
+from velora.runtime import RuntimeContext
+from datetime import datetime, UTC
+
+provider = ElevenLabsVoiceProvider(api_key="sk_...")
+provider.start(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+
+result = provider.synthesize(SpeechRequest(text="Hello from Velora."))
+with open("hello.mp3", "wb") as f:
+    f.write(result.audio)
+
+provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+```
+
+Sin consumidor todavía en `velora.services`/`velora.engines`/
+`velora.workflows` ni en la CLI — ver `PROJECT_CONTEXT.md`.
 
 ## Services de capacidad
 
