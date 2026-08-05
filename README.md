@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Providers — dominio `voice`** (PR-010). Ver
+**Fase: Services — `VoiceService`** (PR-011). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -128,6 +128,20 @@ service = NarrationService(provider)  # cualquier TextGenerationProvider
 result = service.narrate("Describe a city at dawn, in two sentences.")
 print(result.text)
 ```
+
+`VoiceService` es la segunda: mismo patrón, sobre `voice`:
+
+```python
+from velora.services.voice import VoiceService
+
+voice_service = VoiceService(voice_provider)  # cualquier VoiceProvider
+speech = voice_service.speak("Describe a city at dawn, in two sentences.")
+with open("dawn.mp3", "wb") as f:
+    f.write(speech.audio)
+```
+
+Sin consumidor todavía en `velora.engines`/`velora.workflows` — ver
+`PROJECT_CONTEXT.md`.
 
 ## Engines
 

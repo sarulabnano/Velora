@@ -5,16 +5,18 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Providers — dominio `voice` (ElevenLabs)
+## Estado: Services — `VoiceService`
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
 infraestructura** (PR-005), **Providers — text_generation** (PR-006),
 **Services — capacidad: NarrationService** (PR-007), **Engines —
 StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009),
-**Providers — dominio voice** (PR-010).
-Fase siguiente: a decidir — más Engines/Workflows sobre `voice`, o más
-dominios de Providers/Services.
+**Providers — dominio voice** (PR-010), **Services — capacidad:
+VoiceService** (PR-011).
+Fase siguiente: a decidir — extender `StoryWorkflow`/un Engine para
+coordinar `NarrationService` y `VoiceService`, o más dominios de
+Providers/Services.
 
 ## Estructura del repositorio
 
@@ -27,6 +29,7 @@ src/velora/
     logging/                 # (sin cambios en este PR)
     services/                 # Clock, IdGenerator (infraestructura, PR-005)
         narration/               # NarrationService (capacidad, PR-007)
+        voice/                     # VoiceService (capacidad, PR-011)
     runtime/                   # (sin cambios funcionales en este PR)
     providers/
         __init__.py         # Jerarquía de error compartida entre dominios
@@ -58,7 +61,7 @@ tests/
     test_configuration_*.py       # 8 archivos
     test_logging_*.py             # 5 archivos
     test_runtime_*.py             # 8 archivos
-    test_services_*.py            # 3 archivos (incluye narration)
+    test_services_*.py            # 4 archivos (incluye narration, voice)
     test_providers_*.py           # 4 archivos (más 3 de voice)
     test_engines_*.py             # 2 archivos
     test_workflows_*.py           # 1 archivo
@@ -155,6 +158,20 @@ Vive en un subpaquete de `velora.services`, no en la raíz: importar
 `Clock`/`IdGenerator` nunca debe arrastrar `velora.providers` para quien
 no lo necesita.
 
+### `velora.services.voice`
+
+Segundo Service de capacidad (ADR-0014), mismo patrón que
+`velora.services.narration`:
+
+- **`VoiceService`** — envuelve un `VoiceProvider` inyectado.
+  `speak(text: str) -> SpeechResult`. Sin parámetro de configuración
+  por defecto (a diferencia de `system_prompt` en `NarrationService`:
+  síntesis de voz no tiene un equivalente natural). Reutiliza
+  `SpeechResult` directamente. Rechaza `text` vacío con `ValueError`.
+
+Ningún Engine o Workflow existente lo usa todavía —
+`StoryEngine`/`StoryWorkflow` no lo conocen.
+
 ### `velora.engines.story`
 
 El primer Engine (ADR-0011):
@@ -223,6 +240,7 @@ velora.providers.voice  →  velora.runtime   (solo para LifecycleComponent)
 velora.providers.voice  →  velora.providers  (jerarquía de error)
 velora.providers.voice._elevenlabs  →  elevenlabs, httpx (extra opcional)
 velora.services.narration  →  velora.providers.text_generation
+velora.services.voice  →  velora.providers.voice
 velora.engines.story  →  velora.services.narration
 velora.workflows.story  →  velora.engines.story
 ```
@@ -237,19 +255,20 @@ ejecución de `create story` — sus imports de `velora.workflows.story` y
 de `velora.providers.text_generation` están diferidos dentro de las
 funciones que los usan, no a nivel de módulo (ADR-0012), precisamente
 para que el resto de comandos de la CLI —y el propio `import velora.cli`—
-nunca dependan del extra `velora[anthropic]`. `velora.providers.voice`
-no tiene todavía ningún consumidor real dentro del código base —
-`NarrationService`, `StoryEngine` y `StoryWorkflow` no lo conocen; queda
-disponible como dominio de Provider completo, a la espera de un Service
-o Engine real que lo use (ADR-0013).
+nunca dependan del extra `velora[anthropic]`. `velora.services.voice`
+sigue el mismo diagrama que `velora.services.narration`
+(`Service → Provider`), pero no tiene todavía ningún consumidor real
+dentro del código base — `StoryEngine`/`StoryWorkflow` no lo conocen;
+queda disponible como capacidad completa, a la espera de un Engine o
+Workflow real que lo use (ADR-0014).
 
 ## Lo que no existe todavía
 
 Extensions. Tampoco existen Providers de ningún otro dominio (imagen,
 video, música, traducción), más Services de capacidad (`ImageService`,
-`VoiceService`, etc.), más Engines (Subtitle, Timeline, Render, Publish
-— ver `docs/VISION.md`), ni más Workflows que `StoryWorkflow`. Ningún
-Service/Engine/Workflow consume todavía `velora.providers.voice`.
-Cualquier mención a esas capas en otros documentos es planificación, no
+etc.), más Engines (Subtitle, Timeline, Render, Publish — ver
+`docs/VISION.md`), ni más Workflows que `StoryWorkflow`. Ningún
+Engine/Workflow consume todavía `velora.services.voice`. Cualquier
+mención a esas capas en otros documentos es planificación, no
 arquitectura vigente. Este documento se actualizará en cada PR que
 introduzca una capa o dominio nuevo.
