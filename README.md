@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Services — `VoiceService`** (PR-011). Ver
+**Fase: Engines — `NarrationAudioEngine`** (PR-012). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -157,6 +157,22 @@ story = engine.build_story("The history of the printing press")
 for scene in story.scenes:
     print(f"[{scene.index}] {scene.text}")
 ```
+
+`NarrationAudioEngine` es el segundo: sintetiza cada escena de una
+`Story` en audio, vía un `VoiceService` inyectado:
+
+```python
+from velora.engines.narration_audio import NarrationAudioEngine
+
+audio_engine = NarrationAudioEngine(voice_service)  # el mismo VoiceService de arriba
+story_audio = audio_engine.synthesize(story)  # la misma Story de arriba
+
+for scene_audio in story_audio.scenes:
+    with open(f"scene_{scene_audio.index}.{scene_audio.audio_format}", "wb") as f:
+        f.write(scene_audio.audio)
+```
+
+Sin consumidor todavía en `velora.workflows` — ver `PROJECT_CONTEXT.md`.
 
 ## Workflows
 

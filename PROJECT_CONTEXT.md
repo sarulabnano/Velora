@@ -5,13 +5,12 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-011 — Services: VoiceService.**
+**PR-012 — Engines: NarrationAudioEngine.**
 
 ## Milestone activa
 
-**Services** (segundo Service de capacidad completado: `VoiceService`,
-sobre `VoiceProvider`). Próxima: por decidir contigo — ver "Próximo
-paso".
+**Engines** (segundo Engine completado: `NarrationAudioEngine`, sobre
+`VoiceService`). Próxima: por decidir contigo — ver "Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -33,14 +32,16 @@ Discrepancias con lo construido se resuelven vía ADR.
 - `velora.configuration` — sin cambios en este PR.
 - `velora.logging` — sin cambios funcionales en este PR.
 - `velora.services` (raíz) — Services de infraestructura, sin cambios.
-- `velora.services.narration` — `NarrationService`, sin cambios.
-- `velora.services.voice` — **nuevo**: `VoiceService`
-  (`speak(text: str) -> SpeechResult`). Envuelve un `VoiceProvider`
-  inyectado; delega directamente, reutiliza `SpeechResult` como
-  resultado. Sin consumidor todavía dentro del código base.
+- `velora.services.narration`, `velora.services.voice` — sin cambios.
 - `velora.providers` (raíz), `velora.providers.text_generation`,
   `velora.providers.voice` — sin cambios.
 - `velora.engines.story` — sin cambios.
+- `velora.engines.narration_audio` — **nuevo**: `SceneAudio` (`index`,
+  `audio: bytes`, `audio_format: str`), `StoryAudio` (`topic`,
+  `scenes`), `NarrationAudioEngine`
+  (`synthesize(story: Story) -> StoryAudio`). Envuelve un `VoiceService`
+  inyectado; sintetiza cada escena de una `Story` en orden. Sin
+  consumidor todavía dentro del código base.
 - `velora.workflows.story` — sin cambios.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
@@ -48,23 +49,24 @@ Ver `docs/architecture.md` para el detalle de cada símbolo.
 ## Componentes que NO existen todavía
 
 Extensions. Tampoco Providers de imagen, video, música o traducción,
-más Services de capacidad (`ImageService`, etc.), más Engines (Subtitle,
-Timeline, Render, Publish), ni más Workflows que `StoryWorkflow`. Ningún
-Engine/Workflow consume todavía `velora.services.voice`.
+más Services de capacidad, más Engines (Subtitle, Timeline, Render,
+Publish), ni más Workflows que `StoryWorkflow`. Ningún Workflow consume
+todavía `velora.engines.narration_audio`.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0013** — ver PRs anteriores; sin cambios.
-- **ADR-0014** — `VoiceService` es el mismo patrón exacto que ADR-0010
-  ya estableció para `NarrationService`: contrato delgado
-  (`speak(text) -> SpeechResult`), sin decidir qué voz usar (vive en el
-  Provider inyectado), reutiliza `SpeechResult` sin envolverlo, valida
-  solo con `ValueError` (única precondición). A diferencia de
-  `NarrationService`, no tiene parámetro de configuración por defecto
-  en el constructor — no hay equivalente natural a `system_prompt` para
-  síntesis de voz. Vinculante para todo Service de capacidad futuro:
-  mismo patrón, jerarquía de error propia solo cuando haya más de una
-  condición de fallo real que lo justifique.
+- **ADR-0001** a **ADR-0014** — ver PRs anteriores; sin cambios.
+- **ADR-0015** — `NarrationAudioEngine` es el segundo Engine, sobre
+  `VoiceService`, mismo diagrama canónico que `StoryEngine` sobre
+  `NarrationService`. A diferencia de `StoryEngine`, no tiene ninguna
+  precondición propia (`synthesize()` recibe una `Story` ya validada por
+  la capa anterior, no un `topic` crudo). `SceneAudio`/`StoryAudio`
+  reflejan `Scene`/`Story` en su propio dominio (audio, no texto);
+  `SceneAudio` no repite el texto de la escena, solo su `index`. Sin
+  agregación de errores: la primera escena que falle detiene toda la
+  operación. Vinculante para todo Engine futuro que reciba una `Story`
+  ya construida: sin precondición propia sobre lo que la capa anterior
+  ya validó.
 
 ## Criterios de aceptación vigentes
 
@@ -77,35 +79,40 @@ uv run velora
 uv run pytest
 ```
 
-Sin cambios respecto a PR-010. El Core mantiene cobertura de pruebas
-≥90%; PR-011 cierra con 100%. `velora.services.voice` no tiene
+Sin cambios respecto a PR-011. El Core mantiene cobertura de pruebas
+≥90%; PR-012 cierra con 100%. `velora.engines.narration_audio` no tiene
 consumidor en la CLI todavía — no hay comando `velora create ...` nuevo
 en este PR.
 
 ## Próximo paso
 
-Con `NarrationService` y `VoiceService` ya existiendo — dos capacidades
-genuinamente distintas — hay varios caminos razonables. A diferencia de
-tras PR-009, ahora sí hay contenido real para que `StoryWorkflow`
-coordine más de un paso. Necesito tu decisión antes de `Genera PR-012`:
+Con `StoryEngine` y `NarrationAudioEngine` ya existiendo — dos Engines
+reales, cada uno produciendo una mitad de lo que un video necesita
+(texto dividido en escenas, audio de esas escenas) — el camino que
+`PROJECT_CONTEXT.md` venía señalando desde PR-009 finalmente tiene
+sentido: coordinarlos en un Workflow. Necesito tu decisión antes de
+`Genera PR-013`:
 
-1. **Extender `StoryWorkflow`** para que, además de construir la
-   `Story`, sintetice audio para cada escena vía `VoiceService` — la
-   primera vez que un Workflow coordinaría dos capacidades reales.
-   Revelaría si la forma actual de `StoryWorkflow` (un solo paso,
-   delgado) sigue siendo la correcta o necesita crecer/dividirse.
-2. **Un Engine dedicado** (p. ej. un `NarrationAudioEngine`, análogo a
-   `StoryEngine` pero para voz) antes de tocar `StoryWorkflow` — más
-   fiel al diagrama canónico (`Workflow → Engines`, no `Workflow →
-   Services` directamente), pero añade una capa antes de saber si hace
-   falta.
-3. **Tercer dominio de Provider/Service** (imagen) — sigue ampliando
-   cobertura horizontal antes de profundizar la orquestación.
+1. **Extender `StoryWorkflow`** para que, tras construir la `Story` con
+   `StoryEngine`, también la sintetice a audio con
+   `NarrationAudioEngine` — `run(topic) -> Story` pasaría a devolver
+   algo que incluya ambos (¿un nuevo tipo que combine `Story` +
+   `StoryAudio`? ¿dos llamadas separadas que el llamador combina?). Esta
+   es exactamente la decisión de diseño que ADR-0012 dejó pendiente:
+   "revelaría si la forma actual de `StoryWorkflow` sigue siendo la
+   correcta o necesita crecer".
+2. **Un Workflow nuevo**, dejando `StoryWorkflow` como está (solo texto)
+   y creando p. ej. `NarratedStoryWorkflow` que coordina ambos Engines
+   desde cero — evita decidir si `StoryWorkflow` "crece" o no, a costa
+   de tener dos Workflows con superposición parcial.
+3. **Seguir ampliando horizontalmente** (tercer dominio de
+   Provider/Service, p. ej. imagen) antes de resolver la orquestación.
 
-Mi inclinación, si preguntas: opción 2 — `StoryWorkflow` hoy depende de
-`StoryEngine`, no de `NarrationService` directamente (ADR-0012: nunca se
-salta una capa); que empezara a depender también de `VoiceService`
-directamente rompería esa misma disciplina que el propio `StoryWorkflow`
-ya sigue. Un Engine de audio mantiene el diagrama limpio y le da a un
-`StoryWorkflow` extendido (o a un Workflow nuevo) algo real que
-coordinar sin violar su propia regla. Pero es tu llamada.
+Mi inclinación, si preguntas: opción 1 — extender `StoryWorkflow`. Es
+exactamente la pregunta que ADR-0012 dejó abierta a propósito ("antes de
+que exista un segundo Engine que coordinar"); ese segundo Engine ya
+existe. Un Workflow nuevo con solapamiento parcial sería la misma
+sobre-construcción que el manifiesto pide evitar en cada capa anterior.
+Pero es tu llamada, y esta en particular vale la pena discutir antes de
+que la construya — el tipo de resultado que `StoryWorkflow.run()`
+devolvería es una decisión de diseño real, no solo mecánica.
