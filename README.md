@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Engines — `StoryEngine`** (PR-008). Ver
+**Fase: Workflows — `StoryWorkflow`** (PR-009). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -118,6 +118,35 @@ story = engine.build_story("The history of the printing press")
 
 for scene in story.scenes:
     print(f"[{scene.index}] {scene.text}")
+```
+
+## Workflows
+
+`StoryWorkflow` es el primer Workflow: envuelve un `StoryEngine`
+inyectado y ejecuta el pipeline completo (`docs/VISION.md`: "Los
+Workflows conectan todos los motores"):
+
+```python
+from velora.workflows.story import StoryWorkflow
+
+workflow = StoryWorkflow(engine)  # el mismo StoryEngine de arriba
+story = workflow.run("The history of the printing press")
+```
+
+También es el primer subcomando real de la CLI, más allá del smoke-run
+de Runtime:
+
+```bash
+VELORA_ANTHROPIC_API_KEY=sk-ant-... uv run velora create story \
+    --topic "The history of the printing press"
+```
+
+```
+Story: The history of the printing press (3 scene(s))
+
+[0] ...
+[1] ...
+[2] ...
 ```
 
 ## Desarrollo

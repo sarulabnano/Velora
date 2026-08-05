@@ -5,12 +5,12 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-008 — Engines: StoryEngine.**
+**PR-009 — Workflows: StoryWorkflow + `velora create story`.**
 
 ## Milestone activa
 
-**Engines** (primer Engine completado: `StoryEngine`, sobre
-`NarrationService`). Próxima: por decidir contigo — ver "Próximo paso".
+**Workflows** (primer Workflow completado: `StoryWorkflow`, sobre
+`StoryEngine`). Próxima: por decidir contigo — ver "Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -28,35 +28,50 @@ Discrepancias con lo construido se resuelven vía ADR.
 
 - `velora` — paquete raíz, expone `__version__`.
 - `velora.cli` — composition root: Configuration → Logging → Runtime
-  (con Services de infraestructura inyectado). Sin cambios en este PR.
-- `velora.runtime`, `velora.configuration`, `velora.logging` — sin
-  cambios funcionales en este PR.
+  (con Services de infraestructura inyectado). **Nuevo en este PR**:
+  primer subcomando real, `velora create story --topic TOPIC
+  [--max-tokens N]`, que ejecuta `StoryWorkflow` de principio a fin.
+  Requiere `VELORA_ANTHROPIC_API_KEY`. El smoke-run por defecto,
+  `--version` y `--help` no cambian.
+- `velora.runtime` — sin cambios funcionales en este PR.
+- `velora.configuration` — **nuevo en este PR**: `VeloraSettings` gana
+  `anthropic_api_key: str | None` (de `VELORA_ANTHROPIC_API_KEY`),
+  opcional, sin validar en `from_source()` — se valida en el punto de
+  uso (`velora create story`).
+- `velora.logging` — sin cambios funcionales en este PR.
 - `velora.services` (raíz) — Services de infraestructura, sin cambios.
 - `velora.services.narration` — `NarrationService`, sin cambios.
 - `velora.providers`, `velora.providers.text_generation` — sin cambios.
-- `velora.engines.story` — **nuevo**: `Scene`, `Story` (tipos),
-  `StoryEngine` (`build_story(topic, *, max_tokens=1024) -> Story`).
-  Genera narración vía `NarrationService` inyectado y la divide en
-  escenas por párrafos.
+- `velora.engines.story` — sin cambios.
+- `velora.workflows.story` — **nuevo**: `StoryWorkflow`
+  (`run(topic, *, max_tokens=1024) -> Story`). Envuelve un `StoryEngine`
+  inyectado; delega directamente, reutiliza `Story` como resultado.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Componentes que NO existen todavía
 
-Workflows, Extensions. Tampoco Providers de voz, imagen, video, música o
-traducción, más Services de capacidad, ni más Engines (Subtitle,
-Timeline, Render, Publish).
+Extensions. Tampoco Providers de voz, imagen, video, música o
+traducción, más Services de capacidad, más Engines (Subtitle, Timeline,
+Render, Publish), ni más Workflows que `StoryWorkflow`.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0010** — ver PRs anteriores; sin cambios.
-- **ADR-0011** — `StoryEngine` divide escenas por párrafos (determinista,
-  no depende de que el modelo siga un delimitador pedido); sin control
-  de `scene_count` (fuera de alcance deliberado); historia vacía es
-  estado válido, no error; `ValueError` para la única precondición, sin
-  jerarquía de error de `velora.engines` todavía. Vinculante para todo
-  Engine futuro: criterio propio de división si aplica, sin extraer
-  utilidad compartida hasta que un segundo consumidor real la necesite.
+- **ADR-0001** a **ADR-0011** — ver PRs anteriores; sin cambios.
+- **ADR-0012** — `StoryWorkflow` es un envoltorio delgado de un solo
+  Engine, mismo patrón que ADR-0010 aplicó a `NarrationService`: se
+  construye ahora para desbloquear `velora.cli`, antes de que exista un
+  segundo Engine que coordinar. `velora create story` construye toda la
+  cadena (Provider → NarrationService → StoryEngine → StoryWorkflow) en
+  el composition root; el Provider es el único `LifecycleComponent` de
+  un `Runtime` propio, separado del que usa el smoke-run por defecto —
+  `runtime_factory` no se toca. Los imports de `anthropic`,
+  `NarrationService`, `StoryEngine` y `StoryWorkflow` están diferidos
+  dentro de las funciones que los usan: importar `velora.cli`, o correr
+  cualquier comando distinto de `create story`, nunca requiere el extra
+  `velora[anthropic]`. Vinculante para todo Workflow futuro: subpaquete
+  propio de `velora.workflows`, Engine(s) inyectados, subcomando aditivo
+  bajo `create`.
 
 ## Criterios de aceptación vigentes
 
@@ -69,24 +84,27 @@ uv run velora
 uv run pytest
 ```
 
-Sin cambios respecto a PR-007. El Core mantiene cobertura de pruebas
-≥90%; PR-008 cierra con 100%.
+Sin cambios respecto a PR-008. El Core mantiene cobertura de pruebas
+≥90%; PR-009 cierra con 100%. `uv run velora create story --topic "..."`
+requiere además `VELORA_ANTHROPIC_API_KEY` en el entorno.
 
 ## Próximo paso
 
-Con `StoryEngine` funcionando, hay varios caminos razonables — necesito
-tu decisión antes de `Genera PR-009`, igual que en PR-008:
+Con `StoryWorkflow` funcionando y `velora create story` operativo de
+principio a fin, hay varios caminos razonables — necesito tu decisión
+antes de `Genera PR-010`:
 
-1. **Más Engines** (Subtitle Engine, Timeline Engine...) antes de
-   Workflows — sigue completando la capa antes de orquestarla.
-2. **PR-009 — Workflows**: el primer Workflow real, orquestando
-   `StoryEngine` (y, a futuro, más Engines) en un pipeline completo — el
-   primer punto donde `velora.cli` tendría un consumidor real que
-   invocar, más allá del smoke-run actual de Runtime.
-3. **Segundo dominio de Providers/Service de capacidad** (voz, imagen)
-   si prefieres ampliar cobertura horizontal antes de subir de capa.
+1. **Segundo dominio de Providers/Service de capacidad** (voz o imagen)
+   — amplía cobertura horizontal; no añade un segundo Engine todavía.
+2. **Un segundo Engine** (Subtitle Engine, sobre el primer dominio de
+   voz que exista) — la primera vez que `StoryWorkflow` tendría más de
+   un Engine real que coordinar, revelando si su forma actual (delgada,
+   de un solo paso) sigue siendo la correcta o necesita crecer.
+3. **Un segundo Workflow** sobre lo que ya existe — más difícil de
+   justificar todavía: no hay un segundo Engine real que un segundo
+   Workflow pudiera componer de forma distinta a `StoryWorkflow`.
 
-Mi inclinación, si preguntas: opción 2 (Workflows) — un solo Engine ya
-es suficiente para demostrar un Workflow real de principio a fin, y eso
-por fin le da a `velora.cli` algo que hacer más allá de arrancar y
-apagar el Runtime. Pero es tu llamada.
+Mi inclinación, si preguntas: opción 1 (voz o imagen) — es la que más
+directamente desbloquea un segundo Engine real después, y evita
+construir un segundo Workflow o un segundo Engine antes de tener con qué
+llenarlo de contenido genuinamente distinto. Pero es tu llamada.

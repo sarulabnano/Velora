@@ -16,6 +16,7 @@ __all__ = ["VeloraSettings"]
 
 _ENVIRONMENT_KEY = "VELORA_ENVIRONMENT"
 _LOG_LEVEL_KEY = "VELORA_LOG_LEVEL"
+_ANTHROPIC_API_KEY_KEY = "VELORA_ANTHROPIC_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +26,19 @@ class VeloraSettings:
     Constructed only through :meth:`from_source` (or the package-level
     :func:`velora.configuration.load_settings` convenience function) —
     never by reading raw sources ad hoc elsewhere in the codebase.
+
+    ``anthropic_api_key`` is the raw value of
+    ``VELORA_ANTHROPIC_API_KEY``, or ``None`` if unset. Unlike
+    ``environment``/``log_level``, presence is never required here: most
+    of ``velora`` (the default smoke-run, ``--version``) doesn't need
+    it. Whoever does — ``velora create story``, per ADR-0012 — checks
+    for ``None`` itself, at the point of use, instead of this layer
+    enforcing it for every caller.
     """
 
     environment: Environment
     log_level: LogLevel
+    anthropic_api_key: str | None = None
 
     @classmethod
     def from_source(cls, source: ConfigSource) -> VeloraSettings:
@@ -49,4 +59,9 @@ class VeloraSettings:
             LogLevel,
             default=LogLevel.INFO,
         )
-        return cls(environment=environment, log_level=log_level)
+        anthropic_api_key = source.get(_ANTHROPIC_API_KEY_KEY)
+        return cls(
+            environment=environment,
+            log_level=log_level,
+            anthropic_api_key=anthropic_api_key,
+        )
