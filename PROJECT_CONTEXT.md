@@ -5,14 +5,12 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-007 — Services (capacidad): NarrationService.**
+**PR-008 — Engines: StoryEngine.**
 
 ## Milestone activa
 
-**Services de capacidad** (primer Service completado: `NarrationService`,
-sobre `TextGenerationProvider`/Anthropic). Próxima: **Engines** — pero
-requiere decidir explícitamente qué Engine construir primero (ver
-"Próximo paso").
+**Engines** (primer Engine completado: `StoryEngine`, sobre
+`NarrationService`). Próxima: por decidir contigo — ver "Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -33,35 +31,32 @@ Discrepancias con lo construido se resuelven vía ADR.
   (con Services de infraestructura inyectado). Sin cambios en este PR.
 - `velora.runtime`, `velora.configuration`, `velora.logging` — sin
   cambios funcionales en este PR.
-- `velora.services` (raíz) — Services de infraestructura (`Clock`,
-  `IdGenerator`), sin cambios en este PR.
-- `velora.providers`, `velora.providers.text_generation` — sin cambios
-  en este PR.
-- `velora.services.narration` — **nuevo**: `NarrationService`, primer
-  Service de capacidad. Envuelve `TextGenerationProvider` inyectado;
-  `narrate(instructions, *, max_tokens=1024) -> TextGenerationResult`.
+- `velora.services` (raíz) — Services de infraestructura, sin cambios.
+- `velora.services.narration` — `NarrationService`, sin cambios.
+- `velora.providers`, `velora.providers.text_generation` — sin cambios.
+- `velora.engines.story` — **nuevo**: `Scene`, `Story` (tipos),
+  `StoryEngine` (`build_story(topic, *, max_tokens=1024) -> Story`).
+  Genera narración vía `NarrationService` inyectado y la divide en
+  escenas por párrafos.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Componentes que NO existen todavía
 
-Engines, Workflows, Extensions. Tampoco Providers de voz, imagen, video,
-música o traducción, ni más Services de capacidad (`ImageService`, etc.).
+Workflows, Extensions. Tampoco Providers de voz, imagen, video, música o
+traducción, más Services de capacidad, ni más Engines (Subtitle,
+Timeline, Render, Publish).
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0009** — ver PRs anteriores; sin cambios.
-- **ADR-0010** — `NarrationService` se construye antes de Engines (para
-  que Engines pueda depender de un Service, nunca de un Provider
-  directamente, per el diagrama canónico de ADR-0008). Contrato
-  deliberadamente delgado: no decide estructura narrativa. Reutiliza
-  `TextGenerationResult` en vez de un tipo nuevo. Validación mínima con
-  `ValueError` estándar, sin jerarquía de error propia todavía.
-  Vinculante para todo Service de capacidad futuro (`ImageService`,
-  etc.): mismo patrón — subpaquete de `velora.services`, contrato
-  delgado, reutilizar tipos de resultado del dominio de Provider,
-  jerarquía de error propia solo si hay más de una condición de fallo
-  real.
+- **ADR-0001** a **ADR-0010** — ver PRs anteriores; sin cambios.
+- **ADR-0011** — `StoryEngine` divide escenas por párrafos (determinista,
+  no depende de que el modelo siga un delimitador pedido); sin control
+  de `scene_count` (fuera de alcance deliberado); historia vacía es
+  estado válido, no error; `ValueError` para la única precondición, sin
+  jerarquía de error de `velora.engines` todavía. Vinculante para todo
+  Engine futuro: criterio propio de división si aplica, sin extraer
+  utilidad compartida hasta que un segundo consumidor real la necesite.
 
 ## Criterios de aceptación vigentes
 
@@ -74,26 +69,24 @@ uv run velora
 uv run pytest
 ```
 
-Sin cambios respecto a PR-006. El Core (`velora`, `velora.cli`,
-`velora.runtime`, `velora.configuration`, `velora.logging`,
-`velora.services`, `velora.providers`) mantiene cobertura de pruebas
-≥90%; PR-007 cierra con 100%.
+Sin cambios respecto a PR-007. El Core mantiene cobertura de pruebas
+≥90%; PR-008 cierra con 100%.
 
 ## Próximo paso
 
-**Engines** es, de los conceptos del roadmap, el menos especificado
-todavía: ni AGENT.md, ni `architecture.md` original, ni `docs/VISION.md`
-dan más que un párrafo y una lista de ejemplos (Story Engine, Subtitle
-Engine, Timeline Engine, Render Engine, Publish Engine). Antes de
-`Genera PR-008`, hace falta decidir contigo, explícitamente, cuál
-Engine construir primero — no debería decidirlo yo solo sin más
-contexto de producto, a diferencia de las decisiones de PR-005 a PR-007,
-que sí tenían suficiente información en VISION.md para justificarse por
-sí solas. Candidatos razonables dado lo ya construido:
+Con `StoryEngine` funcionando, hay varios caminos razonables — necesito
+tu decisión antes de `Genera PR-009`, igual que en PR-008:
 
-1. **Story Engine mínimo** — el más natural, dado que ya existe
-   `NarrationService` para respaldarlo; probablemente el primer Engine
-   que `docs/VISION.md` esperaría ver.
-2. Exponer `NarrationService` directamente a través de un Workflow
-   trivial de un solo paso, aplazando "lógica compleja" real hasta tener
-   más de un Engine con el que orquestar.
+1. **Más Engines** (Subtitle Engine, Timeline Engine...) antes de
+   Workflows — sigue completando la capa antes de orquestarla.
+2. **PR-009 — Workflows**: el primer Workflow real, orquestando
+   `StoryEngine` (y, a futuro, más Engines) en un pipeline completo — el
+   primer punto donde `velora.cli` tendría un consumidor real que
+   invocar, más allá del smoke-run actual de Runtime.
+3. **Segundo dominio de Providers/Service de capacidad** (voz, imagen)
+   si prefieres ampliar cobertura horizontal antes de subir de capa.
+
+Mi inclinación, si preguntas: opción 2 (Workflows) — un solo Engine ya
+es suficiente para demostrar un Workflow real de principio a fin, y eso
+por fin le da a `velora.cli` algo que hacer más allá de arrancar y
+apagar el Runtime. Pero es tu llamada.

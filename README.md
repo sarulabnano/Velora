@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Services de capacidad — `NarrationService`** (PR-007). Ver
+**Fase: Engines — `StoryEngine`** (PR-008). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -103,6 +103,21 @@ from velora.services.narration import NarrationService
 service = NarrationService(provider)  # cualquier TextGenerationProvider
 result = service.narrate("Describe a city at dawn, in two sentences.")
 print(result.text)
+```
+
+## Engines
+
+`StoryEngine` es el primer Engine: genera narración vía un
+`NarrationService` inyectado y la divide en escenas por párrafos:
+
+```python
+from velora.engines.story import StoryEngine
+
+engine = StoryEngine(service)  # el mismo NarrationService de arriba
+story = engine.build_story("The history of the printing press")
+
+for scene in story.scenes:
+    print(f"[{scene.index}] {scene.text}")
 ```
 
 ## Desarrollo

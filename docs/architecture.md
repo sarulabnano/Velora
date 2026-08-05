@@ -5,14 +5,15 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Services (capacidad) — `NarrationService`
+## Estado: Engines — `StoryEngine`
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
 infraestructura** (PR-005), **Providers — text_generation** (PR-006),
-**Services — capacidad: NarrationService** (PR-007).
-Fase siguiente: **Engines** (por decidir explícitamente qué Engine),
-o un segundo dominio de Providers/Service de capacidad.
+**Services — capacidad: NarrationService** (PR-007), **Engines —
+StoryEngine** (PR-008).
+Fase siguiente: a decidir — más Engines, Workflows, o más dominios de
+Providers/Services.
 
 ## Estructura del repositorio
 
@@ -34,6 +35,12 @@ src/velora/
             _types.py             # Role, Message, TextGenerationRequest/Result
             _protocol.py            # TextGenerationProvider
             _anthropic.py             # AnthropicTextGenerationProvider (real, requiere extra)
+    engines/
+        __init__.py         # Namespace, sin lógica compartida todavía
+        story/
+            __init__.py         # Superficie pública del Story Engine
+            _types.py              # Scene, Story
+            _engine.py               # StoryEngine
 tests/
     test_package_metadata.py
     test_cli.py
@@ -42,6 +49,7 @@ tests/
     test_runtime_*.py             # 8 archivos
     test_services_*.py            # 3 archivos (incluye narration)
     test_providers_*.py           # 4 archivos
+    test_engines_*.py             # 2 archivos
     test_no_direct_environ_access.py     # invariante ejecutable
 docs/
     architecture.md               # Este documento
@@ -112,6 +120,25 @@ Vive en un subpaquete de `velora.services`, no en la raíz: importar
 `Clock`/`IdGenerator` nunca debe arrastrar `velora.providers` para quien
 no lo necesita.
 
+### `velora.engines.story`
+
+El primer Engine (ADR-0011):
+
+- **`Scene`** (`index`, `text`), **`Story`** (`topic`, `scenes`) — tipos
+  producidos, no consumidos, por este Engine; `scenes` puede ser vacío
+  (estado válido, no error).
+- **`StoryEngine`** — envuelve un `NarrationService` inyectado.
+  `build_story(topic: str, *, max_tokens=1024) -> Story`. Genera
+  narración vía el Service y la divide en escenas por párrafos (líneas
+  en blanco) — división determinista, no dependiente de que el modelo
+  siga un formato de delimitador pedido. Sin control de número de
+  escenas (fuera de alcance deliberado). Rechaza `topic` vacío con
+  `ValueError`.
+
+`velora.engines` (raíz) no contiene nada todavía — ningún segundo Engine
+ha revelado una necesidad compartida real que justifique infraestructura
+en la raíz.
+
 ## Dependencias entre componentes
 
 ```
@@ -123,19 +150,19 @@ velora.providers.text_generation  →  velora.runtime   (solo para LifecycleComp
 velora.providers.text_generation  →  velora.providers  (jerarquía de error)
 velora.providers.text_generation._anthropic  →  anthropic (extra opcional)
 velora.services.narration  →  velora.providers.text_generation
+velora.engines.story  →  velora.services.narration
 ```
 
-`velora.services` (raíz: `Clock`/`IdGenerator`) sigue sin depender de
-`velora.providers` — solo el subpaquete `velora.services.narration` lo
-hace, y únicamente para quien lo importe explícitamente. `velora.cli`
-todavía no construye ni usa `NarrationService` ni ningún Provider: no
-hay Engine ni Workflow que los necesite todavía.
+`velora.engines.story` no importa `velora.providers` ni `anthropic` en
+ningún punto — solo `velora.services.narration`, respetando el diagrama
+canónico de ADR-0008. `velora.cli` todavía no construye ni usa
+`StoryEngine`: no hay Workflow que lo necesite todavía.
 
 ## Lo que no existe todavía
 
-Engines, Workflows, Extensions. Tampoco existen Providers de ningún otro
-dominio (voz, imagen, video, música, traducción) ni más Services de
-capacidad (`ImageService`, etc.). Cualquier mención a esas capas en
-otros documentos es planificación, no arquitectura vigente. Este
-documento se actualizará en cada PR que introduzca una capa o dominio
-nuevo.
+Workflows, Extensions. Tampoco existen Providers de ningún otro dominio
+(voz, imagen, video, música, traducción), más Services de capacidad
+(`ImageService`, etc.), ni más Engines (Subtitle, Timeline, Render,
+Publish — ver `docs/VISION.md`). Cualquier mención a esas capas en otros
+documentos es planificación, no arquitectura vigente. Este documento se
+actualizará en cada PR que introduzca una capa o dominio nuevo.
