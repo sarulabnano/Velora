@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Workflows — `StoryWorkflow` extendido** (PR-013). Ver
+**Fase: Providers — tercer dominio horizontal, `image`** (PR-014). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -113,8 +113,33 @@ with open("hello.mp3", "wb") as f:
 provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
 ```
 
+Consumido por `VoiceService`, `NarrationAudioEngine`, y
+`StoryWorkflow` (dentro de `velora create story`) desde PR-011.
+
+Tercer dominio: `image`, respaldado por OpenAI (DALL·E):
+
+```bash
+pip install 'velora[openai]'
+```
+
+```python
+from velora.providers.image import OpenAIImageProvider, ImageRequest
+from velora.runtime import RuntimeContext
+from datetime import datetime, UTC
+
+provider = OpenAIImageProvider(api_key="sk-...")
+provider.start(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+
+result = provider.generate(ImageRequest(prompt="a cat wearing a hat, watercolor style"))
+with open("cat.png", "wb") as f:
+    f.write(result.image)
+
+provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
+```
+
 Sin consumidor todavía en `velora.services`/`velora.engines`/
-`velora.workflows` ni en la CLI — ver `PROJECT_CONTEXT.md`.
+`velora.workflows` ni en la CLI — dominio horizontal, ver
+`PROJECT_CONTEXT.md`.
 
 ## Services de capacidad
 

@@ -18,6 +18,7 @@ dependencies = []
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40,<1"]
 elevenlabs = ["elevenlabs>=2.60,<3"]
+openai = ["openai>=1.60,<3"]
 
 [project.scripts]
 velora = "velora.cli:main"
@@ -37,6 +38,7 @@ dev = [
     "mypy>=1.13",
     "anthropic>=0.40,<1",
     "elevenlabs>=2.60,<3",
+    "openai>=1.60,<3",
 ]
 
 [tool.ruff]

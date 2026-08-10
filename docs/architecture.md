@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Workflows — `StoryWorkflow` extendido
+## Estado: Providers — tercer dominio horizontal, `image`
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -14,9 +14,10 @@ infraestructura** (PR-005), **Providers — text_generation** (PR-006),
 StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009),
 **Providers — dominio voice** (PR-010), **Services — capacidad:
 VoiceService** (PR-011), **Engines — NarrationAudioEngine** (PR-012),
-**Workflows — `StoryWorkflow` coordina ambos Engines** (PR-013).
-Fase siguiente: a decidir — persistir el audio a disco desde la CLI, o
-más dominios de Providers/Services. Ver `PROJECT_CONTEXT.md`.
+**Workflows — `StoryWorkflow` coordina ambos Engines** (PR-013),
+**Providers — dominio image** (PR-014). Fase siguiente: a decidir —
+`ImageService`, persistir el audio a disco desde la CLI, o un cuarto
+dominio de Provider. Ver `PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -44,6 +45,11 @@ src/velora/
             _types.py             # SpeechRequest, SpeechResult
             _protocol.py            # VoiceProvider
             _elevenlabs.py            # ElevenLabsVoiceProvider (real, requiere extra)
+        image/
+            __init__.py         # Superficie pública del dominio
+            _types.py             # ImageRequest, ImageResult
+            _protocol.py            # ImageProvider
+            _openai.py                # OpenAIImageProvider (real, requiere extra)
     engines/
         __init__.py         # Namespace, sin lógica compartida todavía
         story/
@@ -67,7 +73,7 @@ tests/
     test_logging_*.py             # 5 archivos
     test_runtime_*.py             # 8 archivos
     test_services_*.py            # 4 archivos (incluye narration, voice)
-    test_providers_*.py           # 4 archivos (más 3 de voice)
+    test_providers_*.py           # 4 archivos (más 3 de voice, más 3 de image)
     test_engines_*.py             # 4 archivos (más 2 de narration_audio)
     test_workflows_*.py           # 1 archivo
     test_no_direct_environ_access.py     # invariante ejecutable
@@ -146,6 +152,37 @@ Segundo dominio de Provider (ADR-0013), mismo patrón que
   SDK no los envuelve). Requiere el extra opcional `velora[elevenlabs]`
   — independiente de `velora[anthropic]`.
 
+### `velora.providers.image`
+
+Tercer dominio de Provider (ADR-0017), mismo patrón que
+`text_generation` y `voice`:
+
+- **`ImageProvider`** — el único contrato que el resto del sistema
+  conocerá. Síncrono, sin streaming, misma razón que los otros dos
+  dominios.
+- **`ImageRequest`** (`prompt`) — deliberadamente mínimo, un solo campo;
+  modelo, tamaño y calidad viven en el Provider (constructor), no en el
+  request. **`ImageResult`** (`image: bytes`, `image_format: str`) —
+  `image_format` es un `str` plano, no un enum: solo existe un valor
+  real (`"png"`) hasta que un segundo Provider produzca otro.
+- **`OpenAIImageProvider`** — primera implementación real, respaldada
+  por la API de imágenes de OpenAI (DALL·E). Implementa
+  `~velora.runtime.LifecycleComponent`: `start()` construye su propio
+  `httpx.Client` y se lo inyecta al SDK; `stop()` lo cierra — mismo
+  patrón que `ElevenLabsVoiceProvider`. A diferencia de `elevenlabs`, el
+  SDK de `openai` sí distingue clases de excepción por categoría
+  (`AuthenticationError`, `RateLimitError`, `APIConnectionError`,
+  `APIStatusError`) — mismo mapeo 1:1 por tipo que
+  `AnthropicTextGenerationProvider` ya usa, no por `status_code`.
+  Solicita el formato de respuesta `b64_json` y lo decodifica a `bytes`
+  antes de devolverlo — nunca expone una URL temporal como resultado.
+  Requiere el extra opcional `velora[openai]` — independiente de
+  `velora[anthropic]` y `velora[elevenlabs]`.
+
+Sin consumidor todavía en `velora.services`, `velora.engines`, ni
+`velora.workflows` — este PR es horizontal (ADR-0017), no conectado
+verticalmente a ningún Service o Engine.
+
 ### `velora.services.narration`
 
 El primer Service de capacidad (ADR-0008, ADR-0010):
@@ -174,8 +211,9 @@ Segundo Service de capacidad (ADR-0014), mismo patrón que
   síntesis de voz no tiene un equivalente natural). Reutiliza
   `SpeechResult` directamente. Rechaza `text` vacío con `ValueError`.
 
-Ningún Engine o Workflow existente lo usa todavía —
-`StoryEngine`/`StoryWorkflow` no lo conocen.
+Consumido por `NarrationAudioEngine` desde PR-012 (ADR-0015) —
+`StoryEngine` no lo conoce; solo `NarrationAudioEngine`, dentro de
+`StoryWorkflow`, lo hace.
 
 ### `velora.engines.story`
 
@@ -277,6 +315,9 @@ velora.providers.text_generation._anthropic  →  anthropic (extra opcional)
 velora.providers.voice  →  velora.runtime   (solo para LifecycleComponent)
 velora.providers.voice  →  velora.providers  (jerarquía de error)
 velora.providers.voice._elevenlabs  →  elevenlabs, httpx (extra opcional)
+velora.providers.image  →  velora.runtime   (solo para LifecycleComponent)
+velora.providers.image  →  velora.providers  (jerarquía de error)
+velora.providers.image._openai  →  openai, httpx (extra opcional)
 velora.services.narration  →  velora.providers.text_generation
 velora.services.voice  →  velora.providers.voice
 velora.engines.story  →  velora.services.narration
@@ -303,16 +344,22 @@ resto de comandos de la CLI —y el propio `import velora.cli`— nunca
 dependan de los extras `velora[anthropic]` ni `velora[elevenlabs]`.
 `velora.engines.narration_audio` ya tiene un consumidor real:
 `StoryWorkflow` lo coordina junto a `StoryEngine` desde PR-013
-(ADR-0016).
+(ADR-0016). `velora.providers.image` (PR-014, ADR-0017) no aparece en
+ninguna otra flecha del diagrama — ningún `velora.services.*`,
+`velora.engines.*`, `velora.workflows.*`, ni siquiera `velora.cli`, lo
+importa todavía; es horizontal por diseño, a la espera de un
+`ImageService` real.
 
 ## Lo que no existe todavía
 
-Extensions. Tampoco existen Providers de ningún otro dominio (imagen,
-video, música, traducción), más Services de capacidad (`ImageService`,
-etc.), más Engines (Subtitle, Timeline, Render, Publish — ver
-`docs/VISION.md`), ni más Workflows que `StoryWorkflow`. Ningún
-mecanismo para persistir a disco el audio que `StoryWorkflow` produce
-— `create story` lo reporta (tamaño, formato), no lo guarda. Cualquier
-mención a esas capas en otros documentos es planificación, no
-arquitectura vigente. Este documento se actualizará en cada PR que
-introduzca una capa o dominio nuevo.
+Extensions. Tampoco existen más Providers de imagen (Flux, Stable
+Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
+música, traducción); tampoco `ImageService` ni ningún Service, Engine o
+Workflow que consuma `velora.providers.image`. Más Engines (Subtitle,
+Timeline, Render, Publish — ver `docs/VISION.md`), ni más Workflows que
+`StoryWorkflow`, siguen sin existir. Ningún mecanismo para persistir a
+disco el audio que `StoryWorkflow` produce — `create story` lo reporta
+(tamaño, formato), no lo guarda. Cualquier mención a esas capas en
+otros documentos es planificación, no arquitectura vigente. Este
+documento se actualizará en cada PR que introduzca una capa o dominio
+nuevo.
