@@ -74,6 +74,20 @@ def test_reads_anthropic_api_key_from_source() -> None:
     assert settings.anthropic_api_key == "sk-ant-test-value"
 
 
+def test_defaults_elevenlabs_api_key_to_none_when_unset() -> None:
+    settings = VeloraSettings.from_source(_DictSource({}))
+
+    assert settings.elevenlabs_api_key is None
+
+
+def test_reads_elevenlabs_api_key_from_source() -> None:
+    settings = VeloraSettings.from_source(
+        _DictSource({"VELORA_ELEVENLABS_API_KEY": "el-test-value"})
+    )
+
+    assert settings.elevenlabs_api_key == "el-test-value"
+
+
 def test_settings_is_frozen() -> None:
     settings = VeloraSettings.from_source(_DictSource({}))
 

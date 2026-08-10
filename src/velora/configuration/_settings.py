@@ -17,6 +17,7 @@ __all__ = ["VeloraSettings"]
 _ENVIRONMENT_KEY = "VELORA_ENVIRONMENT"
 _LOG_LEVEL_KEY = "VELORA_LOG_LEVEL"
 _ANTHROPIC_API_KEY_KEY = "VELORA_ANTHROPIC_API_KEY"
+_ELEVENLABS_API_KEY_KEY = "VELORA_ELEVENLABS_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,11 +35,17 @@ class VeloraSettings:
     it. Whoever does — ``velora create story``, per ADR-0012 — checks
     for ``None`` itself, at the point of use, instead of this layer
     enforcing it for every caller.
+
+    ``elevenlabs_api_key`` is the raw value of
+    ``VELORA_ELEVENLABS_API_KEY``, or ``None`` if unset — same
+    optional-until-point-of-use treatment as ``anthropic_api_key``, now
+    that ``create story`` needs it too (ADR-0016).
     """
 
     environment: Environment
     log_level: LogLevel
     anthropic_api_key: str | None = None
+    elevenlabs_api_key: str | None = None
 
     @classmethod
     def from_source(cls, source: ConfigSource) -> VeloraSettings:
@@ -60,8 +67,10 @@ class VeloraSettings:
             default=LogLevel.INFO,
         )
         anthropic_api_key = source.get(_ANTHROPIC_API_KEY_KEY)
+        elevenlabs_api_key = source.get(_ELEVENLABS_API_KEY_KEY)
         return cls(
             environment=environment,
             log_level=log_level,
             anthropic_api_key=anthropic_api_key,
+            elevenlabs_api_key=elevenlabs_api_key,
         )

@@ -15,6 +15,7 @@ from velora.logging import LoggingSettings, RuntimeEventLogger
 from velora.logging import LogLevel as LoggingLogLevel
 from velora.providers import ProviderAuthenticationError
 from velora.providers.text_generation import TextGenerationRequest, TextGenerationResult
+from velora.providers.voice import SpeechRequest, SpeechResult
 from velora.runtime import Runtime, RuntimeContext, RuntimeEventListener, RuntimeState
 
 if TYPE_CHECKING:
@@ -31,6 +32,19 @@ _DEVELOPMENT_SETTINGS_WITH_API_KEY = VeloraSettings(
     anthropic_api_key="sk-ant-test-value",
 )
 
+_DEVELOPMENT_SETTINGS_WITH_ELEVENLABS_KEY_ONLY = VeloraSettings(
+    environment=Environment.DEVELOPMENT,
+    log_level=ConfigurationLogLevel.INFO,
+    elevenlabs_api_key="el-test-value",
+)
+
+_DEVELOPMENT_SETTINGS_WITH_BOTH_API_KEYS = VeloraSettings(
+    environment=Environment.DEVELOPMENT,
+    log_level=ConfigurationLogLevel.INFO,
+    anthropic_api_key="sk-ant-test-value",
+    elevenlabs_api_key="el-test-value",
+)
+
 
 def _settings_loader() -> VeloraSettings:
     return _DEVELOPMENT_SETTINGS
@@ -38,6 +52,14 @@ def _settings_loader() -> VeloraSettings:
 
 def _settings_loader_with_api_key() -> VeloraSettings:
     return _DEVELOPMENT_SETTINGS_WITH_API_KEY
+
+
+def _settings_loader_with_elevenlabs_key_only() -> VeloraSettings:
+    return _DEVELOPMENT_SETTINGS_WITH_ELEVENLABS_KEY_ONLY
+
+
+def _settings_loader_with_both_api_keys() -> VeloraSettings:
+    return _DEVELOPMENT_SETTINGS_WITH_BOTH_API_KEYS
 
 
 def test_main_returns_zero_on_success(capsys: pytest.CaptureFixture[str]) -> None:
@@ -215,9 +237,9 @@ def test_unknown_argument_exits_nonzero() -> None:
 
 
 class _FakeTextGenerationProvider:
-    """Satisfies both LifecycleComponent and TextGenerationProvider —
-    `create story` registers the Provider as the Runtime's one
-    component, so a fake standing in for it must satisfy both."""
+    """Satisfies both LifecycleComponent and TextGenerationProvider --
+    `create story` registers the Provider as one of the Runtime's
+    components, so a fake standing in for it must satisfy both."""
 
     def __init__(self, text: str = "First scene.\n\nSecond scene.") -> None:
         self._text = text
@@ -244,6 +266,33 @@ class _FakeTextGenerationProvider:
         )
 
 
+class _FakeVoiceProvider:
+    """Satisfies both LifecycleComponent and VoiceProvider -- since
+    PR-013 (ADR-0016), `create story` registers this Provider too, as
+    the Runtime's second component."""
+
+    def __init__(self) -> None:
+        self.received_requests: list[SpeechRequest] = []
+        self.started = False
+        self.stopped = False
+
+    @property
+    def name(self) -> str:
+        return "fake-voice"
+
+    def start(self, context: RuntimeContext) -> None:
+        del context
+        self.started = True
+
+    def stop(self, context: RuntimeContext) -> None:
+        del context
+        self.stopped = True
+
+    def synthesize(self, request: SpeechRequest) -> SpeechResult:
+        self.received_requests.append(request)
+        return SpeechResult(audio=request.text.encode(), audio_format="mp3")
+
+
 def _provider_factory(
     provider: _FakeTextGenerationProvider,
 ) -> tuple[Callable[[str], _FakeTextGenerationProvider], list[str]]:
@@ -256,16 +305,30 @@ def _provider_factory(
     return _factory, received_api_keys
 
 
+def _voice_provider_factory(
+    provider: _FakeVoiceProvider,
+) -> tuple[Callable[[str], _FakeVoiceProvider], list[str]]:
+    received_api_keys: list[str] = []
+
+    def _factory(api_key: str) -> _FakeVoiceProvider:
+        received_api_keys.append(api_key)
+        return provider
+
+    return _factory, received_api_keys
+
+
 def test_create_story_returns_zero_and_prints_the_scenes(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     provider = _FakeTextGenerationProvider("The city wakes.\n\nNight falls.")
     factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
 
     exit_code = main(
         ["create", "story", "--topic", "A day in the city"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     captured = capsys.readouterr()
@@ -275,41 +338,70 @@ def test_create_story_returns_zero_and_prints_the_scenes(
     assert "[1] Night falls." in captured.out
 
 
-def test_create_story_starts_and_stops_the_provider_via_runtime() -> None:
+def test_create_story_prints_audio_info_per_scene(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = _FakeTextGenerationProvider("The city wakes.\n\nNight falls.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "A day in the city"],
+        settings_loader=_settings_loader_with_both_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "bytes, mp3" in captured.out
+
+
+def test_create_story_starts_and_stops_both_providers_via_runtime() -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
+    voice_provider = _FakeVoiceProvider()
+    voice_factory, _ = _voice_provider_factory(voice_provider)
 
     main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     assert provider.started
     assert provider.stopped
+    assert voice_provider.started
+    assert voice_provider.stopped
 
 
-def test_create_story_passes_the_configured_api_key_to_provider_factory() -> None:
+def test_create_story_passes_the_configured_api_keys_to_the_provider_factories() -> None:
     provider = _FakeTextGenerationProvider()
-    factory, received_api_keys = _provider_factory(provider)
+    factory, received_text_api_keys = _provider_factory(provider)
+    voice_factory, received_voice_api_keys = _voice_provider_factory(_FakeVoiceProvider())
 
     main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
-    assert received_api_keys == ["sk-ant-test-value"]
+    assert received_text_api_keys == ["sk-ant-test-value"]
+    assert received_voice_api_keys == ["el-test-value"]
 
 
 def test_create_story_passes_max_tokens_through_to_the_provider() -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
 
     main(
         ["create", "story", "--topic", "Anything", "--max-tokens", "77"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     assert provider.received_requests[0].max_tokens == 77
@@ -318,32 +410,60 @@ def test_create_story_passes_max_tokens_through_to_the_provider() -> None:
 def test_create_story_max_tokens_defaults_to_1024() -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
 
     main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     assert provider.received_requests[0].max_tokens == 1024
 
 
-def test_create_story_requires_api_key_and_never_constructs_a_provider(
+def test_create_story_requires_anthropic_api_key_and_never_constructs_a_provider(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     def _failing_provider_factory(api_key: str) -> _FakeTextGenerationProvider:
         pytest.fail("Provider must not be constructed without a configured API key")
 
+    def _failing_voice_provider_factory(api_key: str) -> _FakeVoiceProvider:
+        pytest.fail("Provider must not be constructed without a configured API key")
+
     exit_code = main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader,  # anthropic_api_key defaults to None
+        settings_loader=_settings_loader_with_elevenlabs_key_only,  # no anthropic key
         provider_factory=_failing_provider_factory,
+        voice_provider_factory=_failing_voice_provider_factory,
     )
 
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "fatal" in captured.err
     assert "VELORA_ANTHROPIC_API_KEY" in captured.err
+
+
+def test_create_story_requires_elevenlabs_api_key_and_never_constructs_a_provider(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def _failing_provider_factory(api_key: str) -> _FakeTextGenerationProvider:
+        pytest.fail("Provider must not be constructed without a configured API key")
+
+    def _failing_voice_provider_factory(api_key: str) -> _FakeVoiceProvider:
+        pytest.fail("Provider must not be constructed without a configured API key")
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything"],
+        settings_loader=_settings_loader_with_api_key,  # anthropic only, no elevenlabs
+        provider_factory=_failing_provider_factory,
+        voice_provider_factory=_failing_voice_provider_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "fatal" in captured.err
+    assert "VELORA_ELEVENLABS_API_KEY" in captured.err
 
 
 def test_create_story_reports_provider_error_and_exits_nonzero(
@@ -355,11 +475,37 @@ def test_create_story_reports_provider_error_and_exits_nonzero(
             raise ProviderAuthenticationError("invalid API key")
 
     factory, _ = _provider_factory(_FailingProvider())
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
 
     exit_code = main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "fatal" in captured.err
+    assert "invalid API key" in captured.err
+
+
+def test_create_story_reports_voice_provider_error_and_exits_nonzero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _FailingVoiceProvider(_FakeVoiceProvider):
+        def synthesize(self, request: SpeechRequest) -> SpeechResult:
+            del request
+            raise ProviderAuthenticationError("invalid API key")
+
+    factory, _ = _provider_factory(_FakeTextGenerationProvider())
+    voice_factory, _ = _voice_provider_factory(_FailingVoiceProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything"],
+        settings_loader=_settings_loader_with_both_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     captured = capsys.readouterr()
@@ -377,11 +523,13 @@ def test_create_story_reports_runtime_bootstrap_error_and_exits_nonzero(
             raise ValueError("cannot start provider")
 
     factory, _ = _provider_factory(_FailingStartProvider())
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
 
     exit_code = main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     captured = capsys.readouterr()
@@ -392,21 +540,26 @@ def test_create_story_reports_runtime_bootstrap_error_and_exits_nonzero(
 def test_create_story_rejects_empty_topic(capsys: pytest.CaptureFixture[str]) -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
+    voice_provider = _FakeVoiceProvider()
+    voice_factory, _ = _voice_provider_factory(voice_provider)
 
     exit_code = main(
         ["create", "story", "--topic", ""],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
         provider_factory=factory,
+        voice_provider_factory=voice_factory,
     )
 
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "fatal" in captured.err
     assert "must not be empty" in captured.err
-    # The Runtime still starts and stops the Provider cleanly — the
+    # Both Providers still start and stop cleanly via the Runtime -- the
     # precondition fails inside the Workflow, after bootstrap succeeds.
     assert provider.started
     assert provider.stopped
+    assert voice_provider.started
+    assert voice_provider.stopped
 
 
 def test_create_requires_a_target() -> None:
@@ -429,7 +582,7 @@ def test_default_provider_factory_builds_a_real_anthropic_provider(
     """Exercises `_default_text_generation_provider_factory`'s deferred
     import (ADR-0012) end to end through `main`, without a real network
     call: substitutes a fake in place of `AnthropicTextGenerationProvider`
-    at the import site the factory resolves lazily — the same boundary
+    at the import site the factory resolves lazily -- the same boundary
     the real class would occupy."""
     provider = _FakeTextGenerationProvider("Only scene.")
 
@@ -442,11 +595,46 @@ def test_default_provider_factory_builds_a_real_anthropic_provider(
         _fake_anthropic_provider,
     )
 
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+
     exit_code = main(
         ["create", "story", "--topic", "Anything"],
-        settings_loader=_settings_loader_with_api_key,
+        settings_loader=_settings_loader_with_both_api_keys,
+        voice_provider_factory=voice_factory,
     )
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Only scene." in captured.out
+
+
+def test_default_voice_provider_factory_builds_a_real_elevenlabs_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercises `_default_voice_provider_factory`'s deferred import
+    (ADR-0016) end to end through `main`, without a real network call:
+    substitutes a fake in place of `ElevenLabsVoiceProvider` at the
+    import site the factory resolves lazily -- the same boundary the
+    real class would occupy."""
+    provider = _FakeTextGenerationProvider("Only scene.")
+    factory, _ = _provider_factory(provider)
+    voice_provider = _FakeVoiceProvider()
+
+    def _fake_elevenlabs_provider(*, api_key: str) -> _FakeVoiceProvider:
+        del api_key
+        return voice_provider
+
+    monkeypatch.setattr(
+        "velora.providers.voice.ElevenLabsVoiceProvider",
+        _fake_elevenlabs_provider,
+    )
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything"],
+        settings_loader=_settings_loader_with_both_api_keys,
+        provider_factory=factory,
+    )
+
+    assert exit_code == 0
+    assert voice_provider.started
+    assert voice_provider.stopped

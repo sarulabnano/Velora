@@ -60,3 +60,19 @@ def test_default_source_falls_back_to_none_anthropic_api_key(
     settings = load_settings()
 
     assert settings.anthropic_api_key is None
+
+
+def test_reads_elevenlabs_api_key_from_injected_source() -> None:
+    settings = load_settings(_DictSource({"VELORA_ELEVENLABS_API_KEY": "el-test-value"}))
+
+    assert settings.elevenlabs_api_key == "el-test-value"
+
+
+def test_default_source_falls_back_to_none_elevenlabs_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VELORA_ELEVENLABS_API_KEY", raising=False)
+
+    settings = load_settings()
+
+    assert settings.elevenlabs_api_key is None

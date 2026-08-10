@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Engines — `NarrationAudioEngine`** (PR-012). Ver
+**Fase: Workflows — `StoryWorkflow` extendido** (PR-013). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -172,35 +172,40 @@ for scene_audio in story_audio.scenes:
         f.write(scene_audio.audio)
 ```
 
-Sin consumidor todavía en `velora.workflows` — ver `PROJECT_CONTEXT.md`.
-
 ## Workflows
 
-`StoryWorkflow` es el primer Workflow: envuelve un `StoryEngine`
-inyectado y ejecuta el pipeline completo (`docs/VISION.md`: "Los
+`StoryWorkflow` es el primer Workflow, y desde PR-013 coordina ambos
+Engines de arriba: envuelve un `StoryEngine` y un `NarrationAudioEngine`
+inyectados, y ejecuta el pipeline completo (`docs/VISION.md`: "Los
 Workflows conectan todos los motores"):
 
 ```python
 from velora.workflows.story import StoryWorkflow
 
-workflow = StoryWorkflow(engine)  # el mismo StoryEngine de arriba
-story = workflow.run("The history of the printing press")
+workflow = StoryWorkflow(engine, audio_engine)  # los mismos Engines de arriba
+narrated_story = workflow.run("The history of the printing press")
+
+story, story_audio = narrated_story.story, narrated_story.audio
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
 de Runtime:
 
 ```bash
-VELORA_ANTHROPIC_API_KEY=sk-ant-... uv run velora create story \
-    --topic "The history of the printing press"
+VELORA_ANTHROPIC_API_KEY=sk-ant-... \
+VELORA_ELEVENLABS_API_KEY=... \
+uv run velora create story --topic "The history of the printing press"
 ```
 
 ```
 Story: The history of the printing press (3 scene(s))
 
 [0] ...
+    (48213 bytes, mp3)
 [1] ...
+    (51042 bytes, mp3)
 [2] ...
+    (39877 bytes, mp3)
 ```
 
 ## Desarrollo
