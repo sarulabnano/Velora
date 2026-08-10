@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Providers — tercer dominio horizontal, `image`
+## Estado: Services — capacidad, dominio imagen (`ImageService`)
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -15,9 +15,10 @@ StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009),
 **Providers — dominio voice** (PR-010), **Services — capacidad:
 VoiceService** (PR-011), **Engines — NarrationAudioEngine** (PR-012),
 **Workflows — `StoryWorkflow` coordina ambos Engines** (PR-013),
-**Providers — dominio image** (PR-014). Fase siguiente: a decidir —
-`ImageService`, persistir el audio a disco desde la CLI, o un cuarto
-dominio de Provider. Ver `PROJECT_CONTEXT.md`.
+**Providers — dominio image** (PR-014), **Services — capacidad:
+ImageService** (PR-015). Fase siguiente: a decidir — un Engine de
+imagen, extender `StoryWorkflow` una tercera vez, o persistir el audio
+a disco desde la CLI. Ver `PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -31,6 +32,7 @@ src/velora/
     services/                 # Clock, IdGenerator (infraestructura, PR-005)
         narration/               # NarrationService (capacidad, PR-007)
         voice/                     # VoiceService (capacidad, PR-011)
+        image/                       # ImageService (capacidad, PR-015)
     runtime/                   # (sin cambios funcionales en este PR)
     providers/
         __init__.py         # Jerarquía de error compartida entre dominios
@@ -72,7 +74,7 @@ tests/
     test_configuration_*.py       # 8 archivos
     test_logging_*.py             # 5 archivos
     test_runtime_*.py             # 8 archivos
-    test_services_*.py            # 4 archivos (incluye narration, voice)
+    test_services_*.py            # 4 archivos (incluye narration, voice, image)
     test_providers_*.py           # 4 archivos (más 3 de voice, más 3 de image)
     test_engines_*.py             # 4 archivos (más 2 de narration_audio)
     test_workflows_*.py           # 1 archivo
@@ -215,6 +217,22 @@ Consumido por `NarrationAudioEngine` desde PR-012 (ADR-0015) —
 `StoryEngine` no lo conoce; solo `NarrationAudioEngine`, dentro de
 `StoryWorkflow`, lo hace.
 
+### `velora.services.image`
+
+Tercer Service de capacidad (ADR-0018), mismo patrón que
+`velora.services.narration` y `velora.services.voice`:
+
+- **`ImageService`** — envuelve un `ImageProvider` inyectado.
+  `draw(prompt: str) -> ImageResult`. Nombrado `draw`, no `generate`,
+  únicamente para no colisionar léxicamente con
+  `ImageProvider.generate()` en el mismo call stack — sin diferencia
+  semántica. Sin parámetro de configuración por defecto, mismo motivo
+  que `VoiceService`. Reutiliza `ImageResult` directamente. Rechaza
+  `prompt` vacío con `ValueError`.
+
+Sin consumidor todavía en `velora.engines` ni `velora.workflows` —
+mismo estado en el que estuvo `VoiceService` entre PR-011 y PR-012.
+
 ### `velora.engines.story`
 
 El primer Engine (ADR-0011):
@@ -320,6 +338,7 @@ velora.providers.image  →  velora.providers  (jerarquía de error)
 velora.providers.image._openai  →  openai, httpx (extra opcional)
 velora.services.narration  →  velora.providers.text_generation
 velora.services.voice  →  velora.providers.voice
+velora.services.image  →  velora.providers.image
 velora.engines.story  →  velora.services.narration
 velora.engines.narration_audio  →  velora.services.voice
 velora.engines.narration_audio  →  velora.engines.story  (solo el tipo `Story`)
@@ -345,21 +364,22 @@ dependan de los extras `velora[anthropic]` ni `velora[elevenlabs]`.
 `velora.engines.narration_audio` ya tiene un consumidor real:
 `StoryWorkflow` lo coordina junto a `StoryEngine` desde PR-013
 (ADR-0016). `velora.providers.image` (PR-014, ADR-0017) no aparece en
-ninguna otra flecha del diagrama — ningún `velora.services.*`,
-`velora.engines.*`, `velora.workflows.*`, ni siquiera `velora.cli`, lo
-importa todavía; es horizontal por diseño, a la espera de un
-`ImageService` real.
+ninguna otra flecha del diagrama salvo la que lo une a
+`velora.services.image` desde PR-015 (ADR-0018) — ningún
+`velora.engines.*`, `velora.workflows.*`, ni `velora.cli`, importa
+todavía `velora.providers.image` ni `velora.services.image`; ambos
+siguen a la espera de un Engine real que los consuma.
 
 ## Lo que no existe todavía
 
 Extensions. Tampoco existen más Providers de imagen (Flux, Stable
 Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
-música, traducción); tampoco `ImageService` ni ningún Service, Engine o
-Workflow que consuma `velora.providers.image`. Más Engines (Subtitle,
-Timeline, Render, Publish — ver `docs/VISION.md`), ni más Workflows que
-`StoryWorkflow`, siguen sin existir. Ningún mecanismo para persistir a
-disco el audio que `StoryWorkflow` produce — `create story` lo reporta
-(tamaño, formato), no lo guarda. Cualquier mención a esas capas en
-otros documentos es planificación, no arquitectura vigente. Este
-documento se actualizará en cada PR que introduzca una capa o dominio
-nuevo.
+música, traducción); tampoco ningún Engine o Workflow que consuma
+`velora.services.image`/`velora.providers.image` — ambos existen ya,
+pero aislados. Más Engines (Subtitle, Timeline, Render, Publish — ver
+`docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
+existir. Ningún mecanismo para persistir a disco el audio que
+`StoryWorkflow` produce — `create story` lo reporta (tamaño, formato),
+no lo guarda. Cualquier mención a esas capas en otros documentos es
+planificación, no arquitectura vigente. Este documento se actualizará
+en cada PR que introduzca una capa o dominio nuevo.

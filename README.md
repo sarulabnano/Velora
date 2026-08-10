@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Providers — tercer dominio horizontal, `image`** (PR-014). Ver
+**Fase: Services — capacidad, dominio imagen (`ImageService`)** (PR-015). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -163,6 +163,20 @@ voice_service = VoiceService(voice_provider)  # cualquier VoiceProvider
 speech = voice_service.speak("Describe a city at dawn, in two sentences.")
 with open("dawn.mp3", "wb") as f:
     f.write(speech.audio)
+```
+
+Consumido por `NarrationAudioEngine`, dentro de `StoryWorkflow`, desde
+PR-012.
+
+`ImageService` es la tercera: mismo patrón, sobre `image`:
+
+```python
+from velora.services.image import ImageService
+
+image_service = ImageService(image_provider)  # cualquier ImageProvider
+picture = image_service.draw("A city skyline at dawn, watercolor style.")
+with open("dawn.png", "wb") as f:
+    f.write(picture.image)
 ```
 
 Sin consumidor todavía en `velora.engines`/`velora.workflows` — ver
