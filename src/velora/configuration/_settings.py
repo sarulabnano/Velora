@@ -18,6 +18,7 @@ _ENVIRONMENT_KEY = "VELORA_ENVIRONMENT"
 _LOG_LEVEL_KEY = "VELORA_LOG_LEVEL"
 _ANTHROPIC_API_KEY_KEY = "VELORA_ANTHROPIC_API_KEY"
 _ELEVENLABS_API_KEY_KEY = "VELORA_ELEVENLABS_API_KEY"
+_OPENAI_API_KEY_KEY = "VELORA_OPENAI_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,12 +41,17 @@ class VeloraSettings:
     ``VELORA_ELEVENLABS_API_KEY``, or ``None`` if unset — same
     optional-until-point-of-use treatment as ``anthropic_api_key``, now
     that ``create story`` needs it too (ADR-0016).
+
+    ``openai_api_key`` is the raw value of ``VELORA_OPENAI_API_KEY``, or
+    ``None`` if unset — same treatment again, now that ``create story``
+    needs it too (ADR-0019).
     """
 
     environment: Environment
     log_level: LogLevel
     anthropic_api_key: str | None = None
     elevenlabs_api_key: str | None = None
+    openai_api_key: str | None = None
 
     @classmethod
     def from_source(cls, source: ConfigSource) -> VeloraSettings:
@@ -68,9 +74,11 @@ class VeloraSettings:
         )
         anthropic_api_key = source.get(_ANTHROPIC_API_KEY_KEY)
         elevenlabs_api_key = source.get(_ELEVENLABS_API_KEY_KEY)
+        openai_api_key = source.get(_OPENAI_API_KEY_KEY)
         return cls(
             environment=environment,
             log_level=log_level,
             anthropic_api_key=anthropic_api_key,
             elevenlabs_api_key=elevenlabs_api_key,
+            openai_api_key=openai_api_key,
         )

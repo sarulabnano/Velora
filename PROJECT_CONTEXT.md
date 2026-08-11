@@ -5,14 +5,13 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-015 — Services: `ImageService`, capacidad delgada sobre
-`ImageProvider`.**
+**PR-016 — Engines: `SceneImageEngine`; Workflows: `StoryWorkflow`
+coordina sus tres Engines.**
 
 ## Milestone activa
 
-**Services — capacidad, dominio imagen.** Tercer Service de capacidad
-(`NarrationService`, `VoiceService`, `ImageService`), todos existentes
-ya. Próxima: por decidir contigo — ver "Próximo paso".
+**Workflows** (`StoryWorkflow`, ahora coordinando texto + audio +
+imágenes). Próxima: por decidir contigo — ver "Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -29,65 +28,77 @@ Discrepancias con lo construido se resuelven vía ADR.
 ## Componentes que existen hoy
 
 - `velora` — paquete raíz, expone `__version__`.
-- `velora.cli` — sin cambios en este PR: `create story` sigue
-  requiriendo solo `VELORA_ANTHROPIC_API_KEY` y
-  `VELORA_ELEVENLABS_API_KEY`; no conoce `ImageService`.
-- `velora.runtime` — sin cambios.
-- `velora.configuration` — sin cambios.
-- `velora.logging` — sin cambios.
-- `velora.services` (raíz) — sin cambios.
-- `velora.services.narration`, `velora.services.voice` — sin cambios.
-- `velora.services.image` — **nuevo**: tercer Service de capacidad.
-  `ImageService.draw(prompt: str) -> ImageResult`, envolviendo un
-  `ImageProvider` inyectado. Sin consumidor todavía — ningún Engine o
-  Workflow lo conoce.
+- `velora.cli` — **cambia**: `create story` construye ahora también un
+  `ImageProvider` (por defecto, `OpenAIImageProvider`) y lo registra
+  como tercer `LifecycleComponent` del mismo `Runtime` dedicado.
+  Requiere `VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`, **y**
+  `VELORA_OPENAI_API_KEY` — falla rápido con un mensaje `fatal` si falta
+  cualquiera de las tres. Imprime, por escena: el texto, y una línea
+  para el audio y otra para la imagen (tamaño en bytes, formato).
+- `velora.runtime`, `velora.logging` — sin cambios.
+- `velora.configuration` — **cambia**: `VeloraSettings` gana
+  `openai_api_key: str | None = None`, leído de
+  `VELORA_OPENAI_API_KEY` — mismo tratamiento opcional-hasta-el-punto-
+  de-uso que las otras dos claves.
+- `velora.services` (raíz), `velora.services.narration`,
+  `velora.services.voice`, `velora.services.image` — sin cambios.
 - `velora.providers` (raíz), `velora.providers.text_generation`,
   `velora.providers.voice`, `velora.providers.image` — sin cambios.
 - `velora.engines.story`, `velora.engines.narration_audio` — sin
   cambios.
-- `velora.workflows.story` — sin cambios.
+- `velora.engines.scene_image` — **nuevo**: tercer Engine.
+  `SceneImageEngine.illustrate(story: Story) -> StoryImages`, generando
+  una imagen por escena vía `ImageService` inyectado. Tipos nuevos:
+  `SceneImage` (`index`, `image`, `image_format`), `StoryImages`
+  (`topic`, `scenes`). Usa el texto de cada escena como prompt, tal
+  cual, sin reescritura.
+- `velora.workflows.story` — **cambia**: `StoryWorkflow.__init__` recibe
+  ahora `StoryEngine`, `NarrationAudioEngine`, **y** `SceneImageEngine`.
+  `NarratedStory` gana un tercer campo, `images: StoryImages`. `run()`
+  construye, sintetiza, e ilustra, en ese orden.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Estado real del producto — qué se puede hacer hoy
 
-Vale la pena resumirlo explícitamente, porque las piezas están
-deliberadamente aisladas hasta que un Engine/Workflow las coordina:
+Actualizado desde PR-015, ahora que las tres piezas están conectadas:
 
-- **Solo texto**: `StoryEngine` por sí solo. Funciona hoy, sin código
-  nuevo.
-- **Texto + audio**: `StoryWorkflow` completo, o `velora create story`
-  desde la CLI (requiere ambas claves de API). Funciona hoy.
-- **Texto + audio + imágenes**: **no existe como flujo integrado.**
-  `ImageService`/`ImageProvider` existen y funcionan de forma aislada,
-  pero nada en `StoryWorkflow` ni en la CLI los conoce — generar una
-  imagen por escena hoy requeriría código propio, sin ninguna
-  orquestación automática.
+- **Solo texto**: `StoryEngine` por sí solo. Funciona.
+- **Texto + audio**: `StoryEngine` + `NarrationAudioEngine` a mano, o
+  construyendo `StoryWorkflow` sin pasar por la CLI. Funciona.
+- **Texto + audio + imágenes**: **funciona de punta a punta**, tanto en
+  Python directo (`StoryWorkflow` con los tres Engines) como desde la
+  CLI (`velora create story`, que ahora requiere las tres claves de
+  API). Nada se guarda a disco automáticamente — la CLI reporta tamaño
+  y formato por escena, no escribe archivos.
 
 ## Componentes que NO existen todavía
 
-Extensions. Tampoco un Engine o Workflow que consuma `ImageService`
-(el paso que conectaría texto+audio+imagen en un solo flujo), más
-Providers de imagen (Flux, Stable Diffusion), más dominios de Provider
-(video, música, traducción), más Engines (Subtitle, Timeline, Render,
-Publish), ni más Workflows que `StoryWorkflow`. Ningún mecanismo para
-guardar a disco el audio que `StoryWorkflow` ya produce — sigue
-pendiente, sin relación con este PR.
+Extensions. Tampoco más Providers de ningún dominio existente, más
+dominios de Provider (video, música, traducción), más Engines
+(Subtitle, Timeline, Render, Publish), ni más Workflows que
+`StoryWorkflow`. Ningún mecanismo para persistir a disco lo que
+`StoryWorkflow` produce (ni audio ni imágenes) — `create story` lo
+reporta, no lo guarda.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0017** — ver PRs anteriores; sin cambios.
-- **ADR-0018** — `ImageService`, tercer Service de capacidad. Mismo
-  patrón exacto que ADR-0010 (`NarrationService`) y ADR-0014
-  (`VoiceService`): contrato delgado de un solo método
-  (`draw(prompt: str) -> ImageResult`), reutiliza `ImageResult` sin
-  envolverlo, validación mínima con `ValueError`, Provider inyectado
-  nunca construido internamente. Nombrado `draw` en vez de `generate`
-  únicamente para no colisionar léxicamente con
-  `ImageProvider.generate()` en el mismo call stack — sin diferencia
-  semántica. Vinculante para cualquier Service de capacidad futuro:
-  mismo patrón, un verbo de dominio propio en vez de repetir el del
-  Provider.
+- **ADR-0001** a **ADR-0018** — ver PRs anteriores; sin cambios.
+- **ADR-0019** — `SceneImageEngine`, mismo patrón exacto que ADR-0015
+  (`NarrationAudioEngine`): entrada `Story` ya validada, sin
+  precondición propia, sin agregación de errores, depende de
+  `ImageService` nunca de `ImageProvider` directamente. Tipo contenedor
+  nombrado `StoryImages` (plural), no `StoryImage` — única desviación
+  deliberada del espejo con `SceneAudio`/`StoryAudio`, porque "imágenes"
+  es un sustantivo contable y "audio" no. El prompt de cada imagen es
+  el texto de la escena tal cual, sin reescritura, hasta que exista un
+  consumidor real que la necesite. `StoryWorkflow` coordina ahora los
+  tres Engines, en el orden que documenta `docs/VISION.md`;
+  `NarratedStory` compone los tres resultados. `create story` exige las
+  tres claves de API. Vinculante para cualquier Engine futuro que reciba
+  una `Story` ya construida: mismo patrón, un nombre de tipo contenedor
+  elegido por precisión gramatical del dominio, no copiado
+  mecánicamente.
 
 ## Criterios de aceptación vigentes
 
@@ -100,36 +111,33 @@ uv run velora
 uv run pytest
 ```
 
-El Core mantiene cobertura de pruebas ≥90%; PR-015 cierra con 100%.
-`velora create story` no cambia su comportamiento ni sus requisitos en
-este PR.
+El Core mantiene cobertura de pruebas ≥90%; PR-016 cierra con 100%.
+`velora create story --topic "..."` ahora requiere las tres claves de
+API (`VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`,
+`VELORA_OPENAI_API_KEY`) en el entorno para completarse con éxito.
 
 ## Próximo paso
 
-Con los tres Services de capacidad ya reales (`NarrationService`,
-`VoiceService`, `ImageService`) y ninguno de imagen conectado todavía a
-ningún Engine o Workflow, quedan varios caminos razonables para
-`Genera PR-016` — no mutuamente excluyentes, pero conviene decidir el
-orden:
+Con los tres pasos del pipeline de `docs/VISION.md` hasta "generar
+imagenes" ya coordinados por `StoryWorkflow`, quedan varios caminos
+razonables para `Genera PR-017` — no mutuamente excluyentes:
 
-1. **Un Engine de imagen** (p. ej. `SceneImageEngine`) que, dada una
-   `Story`, genere una imagen por escena vía `ImageService` — mismo
-   patrón que `NarrationAudioEngine` ya estableció para audio
-   (ADR-0015): recibe la `Story` ya construida, produce un tipo
-   `StoryImages` (o como se decida llamarlo) con una imagen por escena.
-   Es el paso que, exactamente igual que pasó con audio en PR-012,
-   deja el nuevo dominio con un consumidor real por primera vez.
-2. **Extender `StoryWorkflow` una tercera vez**, una vez exista el
-   Engine de imagen, para que coordine los tres — mismo patrón que
-   ADR-0016 ya estableció al coordinar los primeros dos; no tiene
-   sentido antes de que exista el Engine del punto 1.
-3. **Persistir el audio a disco desde la CLI** — sigue pendiente desde
-   PR-013; no se descartó, solo se pospuso dos veces ya al elegir
-   seguir horizontal.
+1. **Persistir a disco desde la CLI** (audio e imágenes, no solo
+   reportar tamaño/formato) — sigue pendiente desde PR-013, pospuesta
+   tres veces ya. Es el primer resultado verdaderamente entregable de
+   todo el pipeline construido hasta ahora.
+2. **Un Engine nuevo que dependa de los tres resultados existentes**
+   (p. ej. Subtitle Engine, según `docs/VISION.md`) — por primera vez
+   hay tanto `StoryAudio` como `StoryImages` reales de los que depender,
+   no solo texto.
+3. **Un cuarto dominio de Provider/Service** (video, música,
+   traducción) — sigue disponible, aunque ya se demostró tres veces
+   que conviene darle a cada dominio un consumidor real antes de abrir
+   uno nuevo.
 
-Mi inclinación, si preguntas: opción 1. Es la misma secuencia que ya
-demostró funcionar para voz (Provider → Service → Engine →
-Workflow extendido), y es el paso que —por fin— le daría a
-`ImageService` un consumidor real, cerrando el ciclo que dejó abierto
-ADR-0018. Pero, igual que en decisiones anteriores de secuencia (no de
-diseño concreto), dímelo y sigo.
+Mi inclinación, si preguntas: opción 1. Es la más pospuesta de las tres,
+y sin ella, todo lo construido hasta ahora sigue siendo una
+demostración interna — nada de lo que `StoryWorkflow` produce hoy
+sobrevive fuera de la sesión que lo invocó. Pero, igual que en
+decisiones anteriores de secuencia (no de diseño concreto), dímelo y
+sigo.

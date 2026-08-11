@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Services — capacidad, dominio imagen (`ImageService`)
+## Estado: Workflows — `StoryWorkflow` coordina sus tres Engines
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -16,9 +16,10 @@ StoryEngine** (PR-008), **Workflows — StoryWorkflow** (PR-009),
 VoiceService** (PR-011), **Engines — NarrationAudioEngine** (PR-012),
 **Workflows — `StoryWorkflow` coordina ambos Engines** (PR-013),
 **Providers — dominio image** (PR-014), **Services — capacidad:
-ImageService** (PR-015). Fase siguiente: a decidir — un Engine de
-imagen, extender `StoryWorkflow` una tercera vez, o persistir el audio
-a disco desde la CLI. Ver `PROJECT_CONTEXT.md`.
+ImageService** (PR-015), **Engines — SceneImageEngine; Workflows —
+`StoryWorkflow` coordina los tres Engines** (PR-016). Fase siguiente: a
+decidir — persistir a disco desde la CLI, un Engine nuevo (Subtitle),
+o un cuarto dominio de Provider. Ver `PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -62,6 +63,10 @@ src/velora/
             __init__.py         # Superficie pública del Narration Audio Engine
             _types.py              # SceneAudio, StoryAudio
             _engine.py               # NarrationAudioEngine
+        scene_image/
+            __init__.py         # Superficie pública del Scene Image Engine
+            _types.py              # SceneImage, StoryImages
+            _engine.py               # SceneImageEngine
     workflows/
         __init__.py         # Namespace, sin lógica compartida todavía
         story/
@@ -76,7 +81,7 @@ tests/
     test_runtime_*.py             # 8 archivos
     test_services_*.py            # 4 archivos (incluye narration, voice, image)
     test_providers_*.py           # 4 archivos (más 3 de voice, más 3 de image)
-    test_engines_*.py             # 4 archivos (más 2 de narration_audio)
+    test_engines_*.py             # 4 archivos (más 2 de narration_audio, más 2 de scene_image)
     test_workflows_*.py           # 1 archivo
     test_no_direct_environ_access.py     # invariante ejecutable
 docs/
@@ -270,26 +275,48 @@ Segundo Engine (ADR-0015):
   agregación de errores — la primera escena que falle detiene toda la
   operación, propagando la excepción del Provider subyacente tal cual.
 
+### `velora.engines.scene_image`
+
+Tercer Engine (ADR-0019), mismo patrón exacto que
+`velora.engines.narration_audio`:
+
+- **`SceneImage`** (`index`, `image: bytes`, `image_format: str`) —
+  igual que `SceneAudio`, no repite el texto de la escena. **`StoryImages`**
+  (`topic`, `scenes`) — nombrado en plural, a diferencia de
+  `StoryAudio`: "imágenes" es un sustantivo contable (una por escena),
+  "audio" no.
+- **`SceneImageEngine`** — envuelve un `ImageService` inyectado.
+  `illustrate(story: Story) -> StoryImages`. Misma ausencia de
+  precondición propia y de agregación de errores que
+  `NarrationAudioEngine`. Usa el texto de cada escena como prompt, sin
+  reescritura ni ingeniería de prompt — no hay todavía ningún
+  consumidor real que necesite esa traducción.
+
 ### `velora.workflows.story`
 
 El primer Workflow (ADR-0012), extendido desde PR-013 (ADR-0016) para
-coordinar sus dos Engines:
+coordinar dos Engines, y de nuevo desde PR-016 (ADR-0019) para
+coordinar los tres:
 
-- **`NarratedStory`** (`story: Story`, `audio: StoryAudio`) — compone
-  el resultado de ambos Engines sin duplicar sus campos ni aplanarlos en
-  un tipo nuevo; el mismo criterio de "reflejar, no reinventar" que
-  ADR-0015 ya aplicó a `SceneAudio`/`StoryAudio`, aquí aplicado
-  componiendo dos tipos existentes en vez de espejar uno.
-- **`StoryWorkflow`** — envuelve un `StoryEngine` **y** un
-  `NarrationAudioEngine`, ambos inyectados. `run(topic: str, *,
-  max_tokens=1024) -> NarratedStory`: construye la `Story` con
-  `StoryEngine.build_story()` y a continuación la sintetiza con
-  `NarrationAudioEngine.synthesize()`, en ese orden — el único posible,
-  ya que sintetizar necesita las escenas que el primer paso produce. Sin
-  jerarquía de error propia: propaga `ValueError` (de `StoryEngine`) y
-  `VeloraProviderError` (de cualquiera de los dos Providers subyacentes)
-  tal cual. Sin resultado parcial: una falla sintetizando no devuelve
-  ni la `Story` sola ni un `NarratedStory` con audio incompleto.
+- **`NarratedStory`** (`story: Story`, `audio: StoryAudio`, `images:
+  StoryImages`) — compone el resultado de los tres Engines sin
+  duplicar sus campos ni aplanarlos en un tipo nuevo; el mismo criterio
+  de "reflejar, no reinventar" que ADR-0015 ya aplicó a
+  `SceneAudio`/`StoryAudio`, aquí aplicado componiendo tres tipos
+  existentes en vez de espejar uno.
+- **`StoryWorkflow`** — envuelve un `StoryEngine`, un
+  `NarrationAudioEngine`, **y** un `SceneImageEngine`, los tres
+  inyectados. `run(topic: str, *, max_tokens=1024) -> NarratedStory`:
+  construye la `Story` con `StoryEngine.build_story()`, la sintetiza con
+  `NarrationAudioEngine.synthesize()`, y la ilustra con
+  `SceneImageEngine.illustrate()`, en ese orden — el orden que
+  `docs/VISION.md` documenta para su pipeline de ejemplo, aunque
+  sintetizar e ilustrar no dependen entre sí (solo ambos dependen de la
+  `Story` ya construida). Sin jerarquía de error propia: propaga
+  `ValueError` (de `StoryEngine`) y `VeloraProviderError` (de cualquiera
+  de los tres Providers subyacentes) tal cual. Sin resultado parcial:
+  una falla en cualquier paso no devuelve ni la `Story` sola ni un
+  `NarratedStory` incompleto.
 
 `velora.workflows` (raíz) no contiene nada todavía — ningún patrón
 compartido entre Workflows ha justificado infraestructura en la raíz
@@ -300,22 +327,25 @@ compartido entre Workflows ha justificado infraestructura en la raíz
 Primer subcomando real de la CLI, más allá del smoke-run de Runtime
 (ADR-0012). Construye la cadena completa —
 `AnthropicTextGenerationProvider` → `NarrationService` → `StoryEngine`,
-y (desde PR-013, ADR-0016) `ElevenLabsVoiceProvider` → `VoiceService` →
-`NarrationAudioEngine` — en el composition root, registrando ambos
-Providers como `LifecycleComponent`s de un `Runtime` propio (distinto
-del que usa el smoke-run por defecto). Requiere tanto
-`VELORA_ANTHROPIC_API_KEY` como `VELORA_ELEVENLABS_API_KEY`
-(`velora.configuration`, ambos campos opcionales — se validan en el
-punto de uso, no al resolver Configuration; falla rápido si falta
-cualquiera de las dos, antes de construir ningún Provider). Los imports
-de `anthropic`, `elevenlabs`, `NarrationService`, `VoiceService`,
-`StoryEngine`, `NarrationAudioEngine` y `StoryWorkflow` viven dentro de
-las funciones que los usan, no a nivel de módulo: importar `velora.cli`
-(y ejecutar cualquier comando distinto de `create story`) nunca
-requiere los extras opcionales `velora[anthropic]` ni
-`velora[elevenlabs]`. Imprime, por escena, el texto y una línea con el
-tamaño en bytes y el formato del audio sintetizado — sin escribir
-ningún archivo a disco todavía.
+`ElevenLabsVoiceProvider` → `VoiceService` → `NarrationAudioEngine`
+(desde PR-013, ADR-0016), y `OpenAIImageProvider` → `ImageService` →
+`SceneImageEngine` (desde PR-016, ADR-0019) — en el composition root,
+registrando los tres Providers como `LifecycleComponent`s de un
+`Runtime` propio (distinto del que usa el smoke-run por defecto).
+Requiere `VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`, **y**
+`VELORA_OPENAI_API_KEY` (`velora.configuration`, los tres campos
+opcionales — se validan en el punto de uso, no al resolver
+Configuration; falla rápido si falta cualquiera de las tres, antes de
+construir ningún Provider). Los imports de `anthropic`, `elevenlabs`,
+`openai`, `NarrationService`, `VoiceService`, `ImageService`,
+`StoryEngine`, `NarrationAudioEngine`, `SceneImageEngine`, y
+`StoryWorkflow` viven dentro de las funciones que los usan, no a nivel
+de módulo: importar `velora.cli` (y ejecutar cualquier comando distinto
+de `create story`) nunca requiere los extras opcionales
+`velora[anthropic]`, `velora[elevenlabs]`, ni `velora[openai]`.
+Imprime, por escena, el texto, una línea con tamaño/formato del audio,
+y una línea con tamaño/formato de la imagen — sin escribir ningún
+archivo a disco todavía.
 
 ## Dependencias entre componentes
 
@@ -327,6 +357,7 @@ velora.cli  →  velora.services
 velora.cli  →  velora.workflows.story          (solo dentro de `create story`, import diferido)
 velora.cli  →  velora.providers.text_generation  (solo dentro de `create story`, import diferido)
 velora.cli  →  velora.providers.voice             (solo dentro de `create story`, import diferido)
+velora.cli  →  velora.providers.image              (solo dentro de `create story`, import diferido)
 velora.providers.text_generation  →  velora.runtime   (solo para LifecycleComponent)
 velora.providers.text_generation  →  velora.providers  (jerarquía de error)
 velora.providers.text_generation._anthropic  →  anthropic (extra opcional)
@@ -342,44 +373,46 @@ velora.services.image  →  velora.providers.image
 velora.engines.story  →  velora.services.narration
 velora.engines.narration_audio  →  velora.services.voice
 velora.engines.narration_audio  →  velora.engines.story  (solo el tipo `Story`)
+velora.engines.scene_image  →  velora.services.image
+velora.engines.scene_image  →  velora.engines.story  (solo el tipo `Story`)
 velora.workflows.story  →  velora.engines.story
 velora.workflows.story  →  velora.engines.narration_audio
+velora.workflows.story  →  velora.engines.scene_image
 ```
 
 `velora.engines.story` no importa `velora.providers` ni `anthropic` en
 ningún punto — solo `velora.services.narration`, respetando el diagrama
-canónico de ADR-0008. `velora.engines.narration_audio` sigue la misma
-regla con `velora.services.voice`, y depende de `velora.engines.story`
-únicamente para el tipo `Story` que recibe como entrada, no para
-ninguna lógica. `velora.workflows.story` sigue la misma regla: solo
-importa `velora.engines.story` y `velora.engines.narration_audio`,
-nunca se salta una capa hacia `velora.services.*` o `velora.providers`
-directamente. `velora.cli` construye la cadena completa, pero solo
-dentro de la ejecución de `create story` — sus imports de
-`velora.workflows.story`, `velora.providers.text_generation` y
-`velora.providers.voice` están diferidos dentro de las funciones que
+canónico de ADR-0008. `velora.engines.narration_audio` y
+`velora.engines.scene_image` siguen la misma regla con
+`velora.services.voice` y `velora.services.image` respectivamente, y
+ambos dependen de `velora.engines.story` únicamente para el tipo
+`Story` que reciben como entrada, no para ninguna lógica.
+`velora.workflows.story` sigue la misma regla: solo importa
+`velora.engines.story`, `velora.engines.narration_audio`, y
+`velora.engines.scene_image`, nunca se salta una capa hacia
+`velora.services.*` o `velora.providers` directamente. `velora.cli`
+construye la cadena completa, pero solo dentro de la ejecución de
+`create story` — sus imports de `velora.workflows.story`,
+`velora.providers.text_generation`, `velora.providers.voice`, y
+`velora.providers.image` están diferidos dentro de las funciones que
 los usan, no a nivel de módulo (ADR-0012), precisamente para que el
 resto de comandos de la CLI —y el propio `import velora.cli`— nunca
-dependan de los extras `velora[anthropic]` ni `velora[elevenlabs]`.
-`velora.engines.narration_audio` ya tiene un consumidor real:
-`StoryWorkflow` lo coordina junto a `StoryEngine` desde PR-013
-(ADR-0016). `velora.providers.image` (PR-014, ADR-0017) no aparece en
-ninguna otra flecha del diagrama salvo la que lo une a
-`velora.services.image` desde PR-015 (ADR-0018) — ningún
-`velora.engines.*`, `velora.workflows.*`, ni `velora.cli`, importa
-todavía `velora.providers.image` ni `velora.services.image`; ambos
-siguen a la espera de un Engine real que los consuma.
+dependan de los extras `velora[anthropic]`, `velora[elevenlabs]`, ni
+`velora[openai]`. `velora.engines.narration_audio` y
+`velora.engines.scene_image` tienen ya, ambos, un consumidor real:
+`StoryWorkflow` coordina los tres Engines desde PR-016 (ADR-0019).
+`velora.providers.image`/`velora.services.image` (PR-014/PR-015,
+ADR-0017/ADR-0018) dejaron de estar aislados desde PR-016: ahora
+alcanzan al resto del sistema a través de `SceneImageEngine`.
 
 ## Lo que no existe todavía
 
 Extensions. Tampoco existen más Providers de imagen (Flux, Stable
 Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
-música, traducción); tampoco ningún Engine o Workflow que consuma
-`velora.services.image`/`velora.providers.image` — ambos existen ya,
-pero aislados. Más Engines (Subtitle, Timeline, Render, Publish — ver
-`docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
-existir. Ningún mecanismo para persistir a disco el audio que
-`StoryWorkflow` produce — `create story` lo reporta (tamaño, formato),
-no lo guarda. Cualquier mención a esas capas en otros documentos es
-planificación, no arquitectura vigente. Este documento se actualizará
-en cada PR que introduzca una capa o dominio nuevo.
+música, traducción). Más Engines (Subtitle, Timeline, Render, Publish —
+ver `docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
+existir. Ningún mecanismo para persistir a disco lo que `StoryWorkflow`
+produce (ni audio ni imágenes) — `create story` lo reporta (tamaño,
+formato), no lo guarda. Cualquier mención a esas capas en otros
+documentos es planificación, no arquitectura vigente. Este documento se
+actualizará en cada PR que introduzca una capa o dominio nuevo.

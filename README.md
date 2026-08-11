@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Services — capacidad, dominio imagen (`ImageService`)** (PR-015). Ver
+**Fase: Workflows — `StoryWorkflow` coordina sus tres Engines** (PR-016). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -137,9 +137,8 @@ with open("cat.png", "wb") as f:
 provider.stop(RuntimeContext(runtime_id="manual", started_at=datetime.now(UTC)))
 ```
 
-Sin consumidor todavía en `velora.services`/`velora.engines`/
-`velora.workflows` ni en la CLI — dominio horizontal, ver
-`PROJECT_CONTEXT.md`.
+Sin consumidor todavía en `velora.services`; consumido por
+`SceneImageEngine`, dentro de `StoryWorkflow`, desde PR-016.
 
 ## Services de capacidad
 
@@ -179,8 +178,8 @@ with open("dawn.png", "wb") as f:
     f.write(picture.image)
 ```
 
-Sin consumidor todavía en `velora.engines`/`velora.workflows` — ver
-`PROJECT_CONTEXT.md`.
+Consumido por `SceneImageEngine`, dentro de `StoryWorkflow`, desde
+PR-016.
 
 ## Engines
 
@@ -211,20 +210,36 @@ for scene_audio in story_audio.scenes:
         f.write(scene_audio.audio)
 ```
 
+`SceneImageEngine` es el tercero: genera una imagen por escena de una
+`Story`, vía un `ImageService` inyectado:
+
+```python
+from velora.engines.scene_image import SceneImageEngine
+
+image_engine = SceneImageEngine(image_service)  # el mismo ImageService de arriba
+story_images = image_engine.illustrate(story)  # la misma Story de arriba
+
+for scene_image in story_images.scenes:
+    with open(f"scene_{scene_image.index}.{scene_image.image_format}", "wb") as f:
+        f.write(scene_image.image)
+```
+
 ## Workflows
 
-`StoryWorkflow` es el primer Workflow, y desde PR-013 coordina ambos
-Engines de arriba: envuelve un `StoryEngine` y un `NarrationAudioEngine`
-inyectados, y ejecuta el pipeline completo (`docs/VISION.md`: "Los
-Workflows conectan todos los motores"):
+`StoryWorkflow` es el primer Workflow, y desde PR-016 coordina los tres
+Engines de arriba: envuelve un `StoryEngine`, un `NarrationAudioEngine`,
+y un `SceneImageEngine` inyectados, y ejecuta el pipeline completo
+(`docs/VISION.md`: "Los Workflows conectan todos los motores"):
 
 ```python
 from velora.workflows.story import StoryWorkflow
 
-workflow = StoryWorkflow(engine, audio_engine)  # los mismos Engines de arriba
+workflow = StoryWorkflow(engine, audio_engine, image_engine)  # los mismos Engines de arriba
 narrated_story = workflow.run("The history of the printing press")
 
-story, story_audio = narrated_story.story, narrated_story.audio
+story = narrated_story.story
+story_audio = narrated_story.audio
+story_images = narrated_story.images
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
@@ -233,6 +248,7 @@ de Runtime:
 ```bash
 VELORA_ANTHROPIC_API_KEY=sk-ant-... \
 VELORA_ELEVENLABS_API_KEY=... \
+VELORA_OPENAI_API_KEY=sk-... \
 uv run velora create story --topic "The history of the printing press"
 ```
 
@@ -240,11 +256,14 @@ uv run velora create story --topic "The history of the printing press"
 Story: The history of the printing press (3 scene(s))
 
 [0] ...
-    (48213 bytes, mp3)
+    audio: 48213 bytes, mp3
+    image: 1289411 bytes, png
 [1] ...
-    (51042 bytes, mp3)
+    audio: 51042 bytes, mp3
+    image: 1301882 bytes, png
 [2] ...
-    (39877 bytes, mp3)
+    audio: 39877 bytes, mp3
+    image: 1256004 bytes, png
 ```
 
 ## Desarrollo

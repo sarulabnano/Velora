@@ -22,6 +22,12 @@ Since PR-013 (ADR-0016), `create story` runs the extended
 now also builds a `VoiceProvider` and registers it as a second
 `LifecycleComponent` on that same dedicated Runtime, alongside the
 `TextGenerationProvider`.
+
+Since PR-016 (ADR-0019), `create story` runs the further extended
+`StoryWorkflow`: `StoryEngine`, `NarrationAudioEngine`, and
+`SceneImageEngine`, so it now also builds an `ImageProvider` and
+registers it as a third `LifecycleComponent` on that same dedicated
+Runtime.
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ from velora.services import SystemClock, UUIDIdGenerator
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from velora.providers.image import ImageProvider
     from velora.providers.text_generation import TextGenerationProvider
     from velora.providers.voice import VoiceProvider
     from velora.runtime import LifecycleComponent, RuntimeEventListener
@@ -61,6 +68,13 @@ if TYPE_CHECKING:
         `VoiceService` needs) and `LifecycleComponent` (what `Runtime`
         needs) — same reasoning as `_StoryTextGenerationProvider`,
         for the second Provider this command now registers."""
+
+    class _StoryImageProvider(ImageProvider, LifecycleComponent, Protocol):
+        """What `create story` actually needs from its image Provider,
+        since PR-016 (ADR-0019): both `ImageProvider` (what
+        `ImageService` needs) and `LifecycleComponent` (what `Runtime`
+        needs) — same reasoning as `_StoryTextGenerationProvider`,
+        for the third Provider this command now registers."""
 
 
 _PROG_NAME = "velora"
@@ -92,9 +106,10 @@ def _build_parser() -> argparse.ArgumentParser:
     story_parser = create_subparsers.add_parser(
         "story",
         help=(
-            "Generate a narrated, scene-divided, synthesized Story from "
-            "a topic (StoryWorkflow). Requires VELORA_ANTHROPIC_API_KEY "
-            "and VELORA_ELEVENLABS_API_KEY."
+            "Generate a narrated, scene-divided, synthesized, "
+            "illustrated Story from a topic (StoryWorkflow). Requires "
+            "VELORA_ANTHROPIC_API_KEY, VELORA_ELEVENLABS_API_KEY, and "
+            "VELORA_OPENAI_API_KEY."
         ),
     )
     story_parser.add_argument("--topic", required=True, help="The topic to narrate.")
@@ -163,6 +178,23 @@ def _default_voice_provider_factory(api_key: str) -> _StoryVoiceProvider:
     return ElevenLabsVoiceProvider(api_key=api_key)
 
 
+def _default_image_provider_factory(api_key: str) -> _StoryImageProvider:
+    """Build the default ImageProvider for `create story`.
+
+    Imports `OpenAIImageProvider` lazily, inside this function body —
+    not at module level — for the same reason
+    `_default_text_generation_provider_factory` defers its own import
+    (ADR-0012, ADR-0019): importing `velora.cli` (and running every
+    command other than `create story`) must never require the optional
+    `velora[openai]` extra. If it's missing, the `ImportError`
+    `velora.providers.image` already raises on import explains how to
+    install it.
+    """
+    from velora.providers.image import OpenAIImageProvider
+
+    return OpenAIImageProvider(api_key=api_key)
+
+
 def _default_workflow_runtime_factory(
     listeners: Sequence[RuntimeEventListener],
     components: Sequence[LifecycleComponent],
@@ -190,26 +222,29 @@ def _run_create_story(
     event_logger: RuntimeEventLogger,
     provider_factory: Callable[[str], _StoryTextGenerationProvider],
     voice_provider_factory: Callable[[str], _StoryVoiceProvider],
+    image_provider_factory: Callable[[str], _StoryImageProvider],
     workflow_runtime_factory: Callable[
         [Sequence[RuntimeEventListener], Sequence[LifecycleComponent]], Runtime
     ],
 ) -> int:
     """Run `velora create story`: `StoryWorkflow`, end to end.
 
-    Builds the full dependency chain itself — both Providers, both
-    Services, both Engines, `StoryWorkflow` — exactly as the composition
-    root already does for Runtime/Logging: no intermediate layer
-    constructs its own dependencies. `NarrationService`, `VoiceService`,
-    `StoryEngine`, `NarrationAudioEngine`, and `StoryWorkflow` are
+    Builds the full dependency chain itself — all three Providers, all
+    three Services, all three Engines, `StoryWorkflow` — exactly as the
+    composition root already does for Runtime/Logging: no intermediate
+    layer constructs its own dependencies. `NarrationService`,
+    `VoiceService`, `ImageService`, `StoryEngine`,
+    `NarrationAudioEngine`, `SceneImageEngine`, and `StoryWorkflow` are
     imported here, not at module level, for the same reason
     `_default_text_generation_provider_factory` defers its own import
     (ADR-0012): none of them are needed by any command other than this
     one.
 
-    Requires both `settings.anthropic_api_key` and
-    `settings.elevenlabs_api_key` (ADR-0016) — checked before
-    constructing anything, the same "fail fast before side effects"
-    pattern `main` already uses for a `VeloraConfigurationError`.
+    Requires `settings.anthropic_api_key`, `settings.elevenlabs_api_key`
+    (ADR-0016), and `settings.openai_api_key` (ADR-0019) — checked
+    before constructing anything, the same "fail fast before side
+    effects" pattern `main` already uses for a
+    `VeloraConfigurationError`.
     """
     if settings.anthropic_api_key is None:
         print(
@@ -225,20 +260,33 @@ def _run_create_story(
         )
         return 1
 
+    if settings.openai_api_key is None:
+        print(
+            f"{_PROG_NAME}: fatal: VELORA_OPENAI_API_KEY is required for 'create story'.",
+            file=sys.stderr,
+        )
+        return 1
+
     from velora.engines.narration_audio import NarrationAudioEngine
+    from velora.engines.scene_image import SceneImageEngine
     from velora.engines.story import StoryEngine
+    from velora.services.image import ImageService
     from velora.services.narration import NarrationService
     from velora.services.voice import VoiceService
     from velora.workflows.story import StoryWorkflow
 
     text_provider = provider_factory(settings.anthropic_api_key)
     voice_provider = voice_provider_factory(settings.elevenlabs_api_key)
+    image_provider = image_provider_factory(settings.openai_api_key)
     workflow = StoryWorkflow(
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(voice_provider)),
+        SceneImageEngine(ImageService(image_provider)),
     )
 
-    runtime = workflow_runtime_factory([event_logger], [text_provider, voice_provider])
+    runtime = workflow_runtime_factory(
+        [event_logger], [text_provider, voice_provider, image_provider]
+    )
     try:
         with runtime:
             narrated_story: NarratedStory = workflow.run(args.topic, max_tokens=args.max_tokens)
@@ -248,9 +296,12 @@ def _run_create_story(
 
     story = narrated_story.story
     print(f"Story: {story.topic} ({len(story.scenes)} scene(s))")
-    for scene, scene_audio in zip(story.scenes, narrated_story.audio.scenes, strict=True):
+    for scene, scene_audio, scene_image in zip(
+        story.scenes, narrated_story.audio.scenes, narrated_story.images.scenes, strict=True
+    ):
         print(f"\n[{scene.index}] {scene.text}")
-        print(f"    ({len(scene_audio.audio)} bytes, {scene_audio.audio_format})")
+        print(f"    audio: {len(scene_audio.audio)} bytes, {scene_audio.audio_format}")
+        print(f"    image: {len(scene_image.image)} bytes, {scene_image.image_format}")
 
     return 0
 
@@ -265,6 +316,7 @@ def main(
         [str], _StoryTextGenerationProvider
     ] = _default_text_generation_provider_factory,
     voice_provider_factory: Callable[[str], _StoryVoiceProvider] = _default_voice_provider_factory,
+    image_provider_factory: Callable[[str], _StoryImageProvider] = _default_image_provider_factory,
     workflow_runtime_factory: Callable[
         [Sequence[RuntimeEventListener], Sequence[LifecycleComponent]], Runtime
     ] = _default_workflow_runtime_factory,
@@ -287,7 +339,8 @@ def main(
     the three parameters above, scoped to that path; `runtime_factory`
     itself is never reused for it, by design (ADR-0012). Since PR-013
     (ADR-0016), that path also needs `voice_provider_factory`, injected
-    for the same reason.
+    for the same reason. Since PR-016 (ADR-0019), it also needs
+    `image_provider_factory`, injected for the same reason.
 
     Configuration is resolved before Logging or any Runtime exist
     (ADR-0005): a configuration failure is reported to stderr directly,
@@ -321,6 +374,7 @@ def main(
             event_logger=event_logger,
             provider_factory=provider_factory,
             voice_provider_factory=voice_provider_factory,
+            image_provider_factory=image_provider_factory,
             workflow_runtime_factory=workflow_runtime_factory,
         )
 

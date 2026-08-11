@@ -1,11 +1,12 @@
 """Tests for velora.workflows.story.StoryWorkflow.
 
-Uses real StoryEngine/NarrationAudioEngine (and, beneath them, real
-NarrationService/VoiceService) with fake Providers -- the only faked
-boundary is the actual external call, same testing philosophy
-ADR-0011/ADR-0015 already established for those Engines' own tests:
-exercise the real integration all the way down to the fake external
-boundary, not a mocked stand-in for an intermediate layer.
+Uses real StoryEngine/NarrationAudioEngine/SceneImageEngine (and,
+beneath them, real NarrationService/VoiceService/ImageService) with
+fake Providers -- the only faked boundary is the actual external call,
+same testing philosophy ADR-0011/ADR-0015/ADR-0019 already established
+for those Engines' own tests: exercise the real integration all the way
+down to the fake external boundary, not a mocked stand-in for an
+intermediate layer.
 """
 
 from __future__ import annotations
@@ -13,10 +14,13 @@ from __future__ import annotations
 import pytest
 
 from velora.engines.narration_audio import NarrationAudioEngine
+from velora.engines.scene_image import SceneImageEngine
 from velora.engines.story import StoryEngine
 from velora.providers import ProviderRequestError
+from velora.providers.image import ImageRequest, ImageResult
 from velora.providers.text_generation import TextGenerationRequest, TextGenerationResult
 from velora.providers.voice import SpeechRequest, SpeechResult
+from velora.services.image import ImageService
 from velora.services.narration import NarrationService
 from velora.services.voice import VoiceService
 from velora.workflows.story import StoryWorkflow
@@ -43,35 +47,53 @@ class _FakeVoiceProvider:
         return SpeechResult(audio=request.text.encode(), audio_format="mp3")
 
 
+class _FakeImageProvider:
+    def __init__(self) -> None:
+        self.received_requests: list[ImageRequest] = []
+
+    def generate(self, request: ImageRequest) -> ImageResult:
+        self.received_requests.append(request)
+        return ImageResult(image=request.prompt.encode(), image_format="png")
+
+
 class _FailingVoiceProvider:
     def synthesize(self, request: SpeechRequest) -> SpeechResult:
         del request
         raise ProviderRequestError("synthesis failed")
 
 
+class _FailingImageProvider:
+    def generate(self, request: ImageRequest) -> ImageResult:
+        del request
+        raise ProviderRequestError("generation failed")
+
+
 def _workflow(
     text: str,
-) -> tuple[StoryWorkflow, _FakeTextGenerationProvider, _FakeVoiceProvider]:
+) -> tuple[StoryWorkflow, _FakeTextGenerationProvider, _FakeVoiceProvider, _FakeImageProvider]:
     text_provider = _FakeTextGenerationProvider(text)
     voice_provider = _FakeVoiceProvider()
+    image_provider = _FakeImageProvider()
     workflow = StoryWorkflow(
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(voice_provider)),
+        SceneImageEngine(ImageService(image_provider)),
     )
-    return workflow, text_provider, voice_provider
+    return workflow, text_provider, voice_provider, image_provider
 
 
 def test_run_returns_a_narrated_story_with_the_given_topic() -> None:
-    workflow, _, _ = _workflow("Some narration.")
+    workflow, _, _, _ = _workflow("Some narration.")
 
     narrated_story = workflow.run("The history of bridges")
 
     assert narrated_story.story.topic == "The history of bridges"
     assert narrated_story.audio.topic == "The history of bridges"
+    assert narrated_story.images.topic == "The history of bridges"
 
 
 def test_run_divides_narration_into_ordered_scenes() -> None:
-    workflow, _, _ = _workflow("The city wakes.\n\nThe market opens.\n\nNight falls again.")
+    workflow, _, _, _ = _workflow("The city wakes.\n\nThe market opens.\n\nNight falls again.")
 
     narrated_story = workflow.run("A day in the city")
 
@@ -84,7 +106,7 @@ def test_run_divides_narration_into_ordered_scenes() -> None:
 
 
 def test_run_synthesizes_audio_for_every_scene_in_order() -> None:
-    workflow, _, _ = _workflow("The city wakes.\n\nThe market opens.")
+    workflow, _, _, _ = _workflow("The city wakes.\n\nThe market opens.")
 
     narrated_story = workflow.run("A day in the city")
 
@@ -95,8 +117,20 @@ def test_run_synthesizes_audio_for_every_scene_in_order() -> None:
     assert [s.index for s in narrated_story.audio.scenes] == [0, 1]
 
 
+def test_run_illustrates_every_scene_in_order() -> None:
+    workflow, _, _, _ = _workflow("The city wakes.\n\nThe market opens.")
+
+    narrated_story = workflow.run("A day in the city")
+
+    assert [s.image for s in narrated_story.images.scenes] == [
+        b"The city wakes.",
+        b"The market opens.",
+    ]
+    assert [s.index for s in narrated_story.images.scenes] == [0, 1]
+
+
 def test_each_built_scenes_text_is_sent_to_the_voice_provider() -> None:
-    workflow, _, voice_provider = _workflow("First scene.\n\nSecond scene.")
+    workflow, _, voice_provider, _ = _workflow("First scene.\n\nSecond scene.")
 
     workflow.run("A topic")
 
@@ -106,8 +140,19 @@ def test_each_built_scenes_text_is_sent_to_the_voice_provider() -> None:
     ]
 
 
+def test_each_built_scenes_text_is_sent_to_the_image_provider_as_the_prompt() -> None:
+    workflow, _, _, image_provider = _workflow("First scene.\n\nSecond scene.")
+
+    workflow.run("A topic")
+
+    assert [r.prompt for r in image_provider.received_requests] == [
+        "First scene.",
+        "Second scene.",
+    ]
+
+
 def test_max_tokens_is_passed_through_to_the_story_engine() -> None:
-    workflow, text_provider, _ = _workflow("Some narration.")
+    workflow, text_provider, _, _ = _workflow("Some narration.")
 
     workflow.run("A topic", max_tokens=77)
 
@@ -115,7 +160,7 @@ def test_max_tokens_is_passed_through_to_the_story_engine() -> None:
 
 
 def test_max_tokens_defaults_to_1024() -> None:
-    workflow, text_provider, _ = _workflow("Some narration.")
+    workflow, text_provider, _, _ = _workflow("Some narration.")
 
     workflow.run("A topic")
 
@@ -124,23 +169,26 @@ def test_max_tokens_defaults_to_1024() -> None:
 
 @pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
 def test_rejects_empty_topic(blank: str) -> None:
-    workflow, text_provider, voice_provider = _workflow("Some narration.")
+    workflow, text_provider, voice_provider, image_provider = _workflow("Some narration.")
 
     with pytest.raises(ValueError, match="must not be empty"):
         workflow.run(blank)
 
     assert text_provider.received_requests == []
     assert voice_provider.received_requests == []
+    assert image_provider.received_requests == []
 
 
 def test_blank_narration_produces_a_narrated_story_with_zero_scenes() -> None:
-    workflow, _, voice_provider = _workflow("   \n\n  ")
+    workflow, _, voice_provider, image_provider = _workflow("   \n\n  ")
 
     narrated_story = workflow.run("Nothing to say")
 
     assert narrated_story.story.scenes == ()
     assert narrated_story.audio.scenes == ()
+    assert narrated_story.images.scenes == ()
     assert voice_provider.received_requests == []
+    assert image_provider.received_requests == []
 
 
 def test_a_failing_synthesis_propagates_and_returns_no_narrated_story() -> None:
@@ -148,6 +196,19 @@ def test_a_failing_synthesis_propagates_and_returns_no_narrated_story() -> None:
     workflow = StoryWorkflow(
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(_FailingVoiceProvider())),
+        SceneImageEngine(ImageService(_FakeImageProvider())),
+    )
+
+    with pytest.raises(ProviderRequestError):
+        workflow.run("A topic")
+
+
+def test_a_failing_illustration_propagates_and_returns_no_narrated_story() -> None:
+    text_provider = _FakeTextGenerationProvider("First scene.\n\nSecond scene.")
+    workflow = StoryWorkflow(
+        StoryEngine(NarrationService(text_provider)),
+        NarrationAudioEngine(VoiceService(_FakeVoiceProvider())),
+        SceneImageEngine(ImageService(_FailingImageProvider())),
     )
 
     with pytest.raises(ProviderRequestError):
@@ -155,7 +216,7 @@ def test_a_failing_synthesis_propagates_and_returns_no_narrated_story() -> None:
 
 
 def test_works_identically_with_any_conforming_providers() -> None:
-    """The architectural point: swap the Providers behind either Engine,
+    """The architectural point: swap the Providers behind any Engine,
     StoryWorkflow behaves identically -- it never sees a Provider, nor
     even a Service, at all."""
 
@@ -174,9 +235,15 @@ def test_works_identically_with_any_conforming_providers() -> None:
             del request
             return SpeechResult(audio=b"a-completely-different-backend", audio_format="wav")
 
+    class _AnotherFakeImageProvider:
+        def generate(self, request: ImageRequest) -> ImageResult:
+            del request
+            return ImageResult(image=b"a-completely-different-backend", image_format="webp")
+
     workflow = StoryWorkflow(
         StoryEngine(NarrationService(_AnotherFakeTextGenerationProvider())),
         NarrationAudioEngine(VoiceService(_AnotherFakeVoiceProvider())),
+        SceneImageEngine(ImageService(_AnotherFakeImageProvider())),
     )
 
     narrated_story = workflow.run("Anything")
@@ -184,3 +251,5 @@ def test_works_identically_with_any_conforming_providers() -> None:
     assert narrated_story.story.scenes[0].text == "A completely different backend narrated this."
     assert narrated_story.audio.scenes[0].audio == b"a-completely-different-backend"
     assert narrated_story.audio.scenes[0].audio_format == "wav"
+    assert narrated_story.images.scenes[0].image == b"a-completely-different-backend"
+    assert narrated_story.images.scenes[0].image_format == "webp"

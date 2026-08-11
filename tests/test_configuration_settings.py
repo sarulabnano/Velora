@@ -88,6 +88,18 @@ def test_reads_elevenlabs_api_key_from_source() -> None:
     assert settings.elevenlabs_api_key == "el-test-value"
 
 
+def test_defaults_openai_api_key_to_none_when_unset() -> None:
+    settings = VeloraSettings.from_source(_DictSource({}))
+
+    assert settings.openai_api_key is None
+
+
+def test_reads_openai_api_key_from_source() -> None:
+    settings = VeloraSettings.from_source(_DictSource({"VELORA_OPENAI_API_KEY": "oa-test-value"}))
+
+    assert settings.openai_api_key == "oa-test-value"
+
+
 def test_settings_is_frozen() -> None:
     settings = VeloraSettings.from_source(_DictSource({}))
 
