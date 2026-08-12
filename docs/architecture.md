@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Workflows — `StoryWorkflow` coordina sus tres Engines
+## Estado: CLI — `create story` persiste su resultado a disco
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -17,9 +17,12 @@ VoiceService** (PR-011), **Engines — NarrationAudioEngine** (PR-012),
 **Workflows — `StoryWorkflow` coordina ambos Engines** (PR-013),
 **Providers — dominio image** (PR-014), **Services — capacidad:
 ImageService** (PR-015), **Engines — SceneImageEngine; Workflows —
-`StoryWorkflow` coordina los tres Engines** (PR-016). Fase siguiente: a
-decidir — persistir a disco desde la CLI, un Engine nuevo (Subtitle),
-o un cuarto dominio de Provider. Ver `PROJECT_CONTEXT.md`.
+`StoryWorkflow` coordina los tres Engines** (PR-016), **CLI —
+persistencia a disco** (PR-017). El pipeline de `create story` es ahora
+un entregable completo: texto, audio, imágenes, y su persistencia.
+Fase siguiente: a decidir — un Engine nuevo (Subtitle), un cuarto
+dominio de Provider, o mejoras al propio `create story`. Ver
+`PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -343,9 +346,18 @@ construir ningún Provider). Los imports de `anthropic`, `elevenlabs`,
 de módulo: importar `velora.cli` (y ejecutar cualquier comando distinto
 de `create story`) nunca requiere los extras opcionales
 `velora[anthropic]`, `velora[elevenlabs]`, ni `velora[openai]`.
-Imprime, por escena, el texto, una línea con tamaño/formato del audio,
-y una línea con tamaño/formato de la imagen — sin escribir ningún
-archivo a disco todavía.
+
+Desde PR-017 (ADR-0020), persiste su resultado a disco:
+`_save_narrated_story` escribe, bajo `<--output-dir>/<runtime_id>/`
+(`--output-dir` por defecto `.`; `runtime_id` es el mismo id que el
+`Runtime` de esa ejecución ya genera), un `story.txt` con la
+transcripción, y un archivo `scene_{index:03d}.{formato}` por escena
+para audio y otro para imagen. Ocurre después de que `StoryWorkflow`
+completa con éxito y antes de imprimir cualquier salida — lo impreso
+describe lo ya escrito. Un `OSError` al persistir se reporta como
+`fatal`, igual que cualquier otro fallo de este comando. Imprime, por
+escena, el texto y los nombres de los dos archivos guardados (audio e
+imagen), y la ruta completa del directorio de esa ejecución.
 
 ## Dependencias entre componentes
 
@@ -411,8 +423,8 @@ Extensions. Tampoco existen más Providers de imagen (Flux, Stable
 Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
 música, traducción). Más Engines (Subtitle, Timeline, Render, Publish —
 ver `docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
-existir. Ningún mecanismo para persistir a disco lo que `StoryWorkflow`
-produce (ni audio ni imágenes) — `create story` lo reporta (tamaño,
-formato), no lo guarda. Cualquier mención a esas capas en otros
+existir. Ningún mecanismo para reanudar o reutilizar una ejecución
+anterior de `create story` desde su directorio ya guardado — cada
+ejecución es independiente. Cualquier mención a esas capas en otros
 documentos es planificación, no arquitectura vigente. Este documento se
 actualizará en cada PR que introduzca una capa o dominio nuevo.

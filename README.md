@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Workflows — `StoryWorkflow` coordina sus tres Engines** (PR-016). Ver
+**Fase: CLI — `create story` persiste su resultado a disco** (PR-017). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -243,28 +243,37 @@ story_images = narrated_story.images
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
-de Runtime:
+de Runtime — y, desde PR-017, persiste su resultado a disco:
 
 ```bash
 VELORA_ANTHROPIC_API_KEY=sk-ant-... \
 VELORA_ELEVENLABS_API_KEY=... \
 VELORA_OPENAI_API_KEY=sk-... \
-uv run velora create story --topic "The history of the printing press"
+uv run velora create story --topic "The history of the printing press" \
+    --output-dir ./output
 ```
 
 ```
 Story: The history of the printing press (3 scene(s))
+Saved to: output/3f2a9e1c-...
 
 [0] ...
-    audio: 48213 bytes, mp3
-    image: 1289411 bytes, png
+    audio: scene_000.mp3
+    image: scene_000.png
 [1] ...
-    audio: 51042 bytes, mp3
-    image: 1301882 bytes, png
+    audio: scene_001.mp3
+    image: scene_001.png
 [2] ...
-    audio: 39877 bytes, mp3
-    image: 1256004 bytes, png
+    audio: scene_002.mp3
+    image: scene_002.png
 ```
+
+`--output-dir` es opcional (por defecto, el directorio actual). Cada
+ejecución crea su propio subdirectorio, nombrado con el `runtime_id` de
+esa ejecución, así que ejecuciones sucesivas con el mismo
+`--output-dir` nunca se pisan entre sí. Dentro de ese subdirectorio:
+`story.txt` (la transcripción completa) y un archivo de audio y uno de
+imagen por escena.
 
 ## Desarrollo
 

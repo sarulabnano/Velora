@@ -28,12 +28,20 @@ Since PR-016 (ADR-0019), `create story` runs the further extended
 `SceneImageEngine`, so it now also builds an `ImageProvider` and
 registers it as a third `LifecycleComponent` on that same dedicated
 Runtime.
+
+Since PR-017 (ADR-0020), `create story` also persists its result to
+disk: a `story.txt` transcript plus one audio and one image file per
+scene, under `<output-dir>/<runtime-id>/` — `<output-dir>` defaults to
+the current directory; `<runtime-id>` is the same id the Runtime itself
+already generates per run, reused rather than inventing a second
+identifier.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from velora import __version__
@@ -118,6 +126,15 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1024,
         help="Maximum tokens for the underlying generation call (default: 1024).",
+    )
+    story_parser.add_argument(
+        "--output-dir",
+        default=".",
+        help=(
+            "Directory under which to save the generated Story. A "
+            "subdirectory named after the run's Runtime id is created "
+            "inside it (default: current directory)."
+        ),
     )
 
     return parser
@@ -215,6 +232,41 @@ def _default_workflow_runtime_factory(
     )
 
 
+def _save_narrated_story(narrated_story: NarratedStory, output_dir: Path) -> None:
+    """Persist a `NarratedStory` to `output_dir` (ADR-0020).
+
+    Writes one `scene_{index:03d}.{format}` file per scene for both
+    `narrated_story.audio` and `narrated_story.images`, plus a
+    `story.txt` transcript (the topic and every scene's text, the same
+    content `_run_create_story` already prints to stdout) — so
+    `output_dir` alone is a complete, self-contained deliverable: audio,
+    images, and the text that ties them together, not just the binary
+    artifacts.
+
+    `output_dir` is created (with any missing parents) if it doesn't
+    exist yet — mirrors `mkdir -p`, since a fresh, generated
+    subdirectory (see `_run_create_story`) never exists beforehand.
+
+    :raises OSError: `output_dir` could not be created, or a file could
+        not be written to it (permissions, a full disk, and so on).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    story = narrated_story.story
+    transcript_lines = [f"Story: {story.topic}", ""]
+    for scene in story.scenes:
+        transcript_lines.append(f"[{scene.index}] {scene.text}")
+    (output_dir / "story.txt").write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
+
+    for scene_audio in narrated_story.audio.scenes:
+        path = output_dir / f"scene_{scene_audio.index:03d}.{scene_audio.audio_format}"
+        path.write_bytes(scene_audio.audio)
+
+    for scene_image in narrated_story.images.scenes:
+        path = output_dir / f"scene_{scene_image.index:03d}.{scene_image.image_format}"
+        path.write_bytes(scene_image.image)
+
+
 def _run_create_story(
     args: argparse.Namespace,
     *,
@@ -245,6 +297,13 @@ def _run_create_story(
     before constructing anything, the same "fail fast before side
     effects" pattern `main` already uses for a
     `VeloraConfigurationError`.
+
+    On success, persists the result via `_save_narrated_story` before
+    printing anything (ADR-0020) — printing describes what was written,
+    so writing must happen first; a failure writing to disk is reported
+    the same "fatal" way as every other failure path here, distinct
+    from `VeloraRuntimeError`/`VeloraProviderError`/`ValueError` only in
+    that it's an `OSError`.
     """
     if settings.anthropic_api_key is None:
         print(
@@ -294,14 +353,22 @@ def _run_create_story(
         print(f"{_PROG_NAME}: fatal: {exc}", file=sys.stderr)
         return 1
 
+    output_dir = Path(args.output_dir) / runtime.context.runtime_id
+    try:
+        _save_narrated_story(narrated_story, output_dir)
+    except OSError as exc:
+        print(f"{_PROG_NAME}: fatal: {exc}", file=sys.stderr)
+        return 1
+
     story = narrated_story.story
     print(f"Story: {story.topic} ({len(story.scenes)} scene(s))")
+    print(f"Saved to: {output_dir}")
     for scene, scene_audio, scene_image in zip(
         story.scenes, narrated_story.audio.scenes, narrated_story.images.scenes, strict=True
     ):
         print(f"\n[{scene.index}] {scene.text}")
-        print(f"    audio: {len(scene_audio.audio)} bytes, {scene_audio.audio_format}")
-        print(f"    image: {len(scene_image.image)} bytes, {scene_image.image_format}")
+        print(f"    audio: scene_{scene.index:03d}.{scene_audio.audio_format}")
+        print(f"    image: scene_{scene.index:03d}.{scene_image.image_format}")
 
     return 0
 

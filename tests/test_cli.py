@@ -21,6 +21,7 @@ from velora.runtime import Runtime, RuntimeContext, RuntimeEventListener, Runtim
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from pathlib import Path
 
 _DEVELOPMENT_SETTINGS = VeloraSettings(
     environment=Environment.DEVELOPMENT,
@@ -370,6 +371,7 @@ def _image_provider_factory(
 
 
 def test_create_story_returns_zero_and_prints_the_scenes(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     provider = _FakeTextGenerationProvider("The city wakes.\n\nNight falls.")
@@ -378,7 +380,7 @@ def test_create_story_returns_zero_and_prints_the_scenes(
     image_factory, _ = _image_provider_factory(_FakeImageProvider())
 
     exit_code = main(
-        ["create", "story", "--topic", "A day in the city"],
+        ["create", "story", "--topic", "A day in the city", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -392,16 +394,46 @@ def test_create_story_returns_zero_and_prints_the_scenes(
     assert "[1] Night falls." in captured.out
 
 
-def test_create_story_prints_audio_and_image_info_per_scene(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_create_story_saves_a_transcript_and_one_file_per_scene(tmp_path: Path) -> None:
     provider = _FakeTextGenerationProvider("The city wakes.\n\nNight falls.")
     factory, _ = _provider_factory(provider)
     voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
     image_factory, _ = _image_provider_factory(_FakeImageProvider())
 
     exit_code = main(
-        ["create", "story", "--topic", "A day in the city"],
+        ["create", "story", "--topic", "A day in the city", "--output-dir", str(tmp_path)],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+    assert exit_code == 0
+
+    run_dirs = list(tmp_path.iterdir())
+    assert len(run_dirs) == 1
+    output_dir = run_dirs[0]
+
+    transcript = (output_dir / "story.txt").read_text(encoding="utf-8")
+    assert "Story: A day in the city" in transcript
+    assert "[0] The city wakes." in transcript
+    assert "[1] Night falls." in transcript
+
+    assert (output_dir / "scene_000.mp3").read_bytes() == b"The city wakes."
+    assert (output_dir / "scene_001.mp3").read_bytes() == b"Night falls."
+    assert (output_dir / "scene_000.png").read_bytes() == b"The city wakes."
+    assert (output_dir / "scene_001.png").read_bytes() == b"Night falls."
+
+
+def test_create_story_prints_the_output_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    provider = _FakeTextGenerationProvider("A scene.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -410,13 +442,91 @@ def test_create_story_prints_audio_and_image_info_per_scene(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "audio:" in captured.out
-    assert "bytes, mp3" in captured.out
-    assert "image:" in captured.out
-    assert "bytes, png" in captured.out
+    run_dirs = list(tmp_path.iterdir())
+    assert len(run_dirs) == 1
+    assert f"Saved to: {run_dirs[0]}" in captured.out
 
 
-def test_create_story_starts_and_stops_all_three_providers_via_runtime() -> None:
+def test_create_story_output_dir_defaults_to_current_directory() -> None:
+    from velora.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["create", "story", "--topic", "Anything"])
+
+    assert args.output_dir == "."
+
+
+def test_create_story_two_runs_get_separate_output_directories(tmp_path: Path) -> None:
+    provider = _FakeTextGenerationProvider("A scene.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    for _ in range(2):
+        exit_code = main(
+            ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
+            settings_loader=_settings_loader_with_all_api_keys,
+            provider_factory=factory,
+            voice_provider_factory=voice_factory,
+            image_provider_factory=image_factory,
+        )
+        assert exit_code == 0
+
+    assert len(list(tmp_path.iterdir())) == 2
+
+
+def test_create_story_reports_disk_write_failure_and_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A file where the CLI needs to create a directory: os.makedirs
+    # fails with FileExistsError (an OSError subclass).
+    blocking_file = tmp_path / "blocked"
+    blocking_file.write_text("not a directory")
+
+    provider = _FakeTextGenerationProvider("A scene.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything", "--output-dir", str(blocking_file)],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "fatal" in captured.err
+
+
+def test_create_story_prints_audio_and_image_filenames_per_scene(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = _FakeTextGenerationProvider("The city wakes.\n\nNight falls.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "A day in the city", "--output-dir", str(tmp_path)],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "audio: scene_000.mp3" in captured.out
+    assert "audio: scene_001.mp3" in captured.out
+    assert "image: scene_000.png" in captured.out
+    assert "image: scene_001.png" in captured.out
+
+
+def test_create_story_starts_and_stops_all_three_providers_via_runtime(tmp_path: Path) -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
     voice_provider = _FakeVoiceProvider()
@@ -425,7 +535,7 @@ def test_create_story_starts_and_stops_all_three_providers_via_runtime() -> None
     image_factory, _ = _image_provider_factory(image_provider)
 
     main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -440,14 +550,16 @@ def test_create_story_starts_and_stops_all_three_providers_via_runtime() -> None
     assert image_provider.stopped
 
 
-def test_create_story_passes_the_configured_api_keys_to_the_provider_factories() -> None:
+def test_create_story_passes_the_configured_api_keys_to_the_provider_factories(
+    tmp_path: Path,
+) -> None:
     provider = _FakeTextGenerationProvider()
     factory, received_text_api_keys = _provider_factory(provider)
     voice_factory, received_voice_api_keys = _voice_provider_factory(_FakeVoiceProvider())
     image_factory, received_image_api_keys = _image_provider_factory(_FakeImageProvider())
 
     main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -459,14 +571,23 @@ def test_create_story_passes_the_configured_api_keys_to_the_provider_factories()
     assert received_image_api_keys == ["oa-test-value"]
 
 
-def test_create_story_passes_max_tokens_through_to_the_provider() -> None:
+def test_create_story_passes_max_tokens_through_to_the_provider(tmp_path: Path) -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
     voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
     image_factory, _ = _image_provider_factory(_FakeImageProvider())
 
     main(
-        ["create", "story", "--topic", "Anything", "--max-tokens", "77"],
+        [
+            "create",
+            "story",
+            "--topic",
+            "Anything",
+            "--max-tokens",
+            "77",
+            "--output-dir",
+            str(tmp_path),
+        ],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -476,14 +597,14 @@ def test_create_story_passes_max_tokens_through_to_the_provider() -> None:
     assert provider.received_requests[0].max_tokens == 77
 
 
-def test_create_story_max_tokens_defaults_to_1024() -> None:
+def test_create_story_max_tokens_defaults_to_1024(tmp_path: Path) -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
     voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
     image_factory, _ = _image_provider_factory(_FakeImageProvider())
 
     main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -675,7 +796,9 @@ def test_create_story_reports_runtime_bootstrap_error_and_exits_nonzero(
     assert "fatal" in captured.err
 
 
-def test_create_story_rejects_empty_topic(capsys: pytest.CaptureFixture[str]) -> None:
+def test_create_story_rejects_empty_topic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     provider = _FakeTextGenerationProvider()
     factory, _ = _provider_factory(provider)
     voice_provider = _FakeVoiceProvider()
@@ -684,7 +807,7 @@ def test_create_story_rejects_empty_topic(capsys: pytest.CaptureFixture[str]) ->
     image_factory, _ = _image_provider_factory(image_provider)
 
     exit_code = main(
-        ["create", "story", "--topic", ""],
+        ["create", "story", "--topic", "", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,
@@ -704,6 +827,9 @@ def test_create_story_rejects_empty_topic(capsys: pytest.CaptureFixture[str]) ->
     assert voice_provider.stopped
     assert image_provider.started
     assert image_provider.stopped
+    # And nothing was written to disk -- the precondition fails before
+    # `_save_narrated_story` is ever reached.
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_create_requires_a_target() -> None:
@@ -721,7 +847,7 @@ def test_create_story_requires_topic() -> None:
 
 
 def test_default_provider_factory_builds_a_real_anthropic_provider(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Exercises `_default_text_generation_provider_factory`'s deferred
     import (ADR-0012) end to end through `main`, without a real network
@@ -743,7 +869,7 @@ def test_default_provider_factory_builds_a_real_anthropic_provider(
     image_factory, _ = _image_provider_factory(_FakeImageProvider())
 
     exit_code = main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         voice_provider_factory=voice_factory,
         image_provider_factory=image_factory,
@@ -755,6 +881,7 @@ def test_default_provider_factory_builds_a_real_anthropic_provider(
 
 
 def test_default_voice_provider_factory_builds_a_real_elevenlabs_provider(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Exercises `_default_voice_provider_factory`'s deferred import
@@ -777,7 +904,7 @@ def test_default_voice_provider_factory_builds_a_real_elevenlabs_provider(
     )
 
     exit_code = main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         image_provider_factory=image_factory,
@@ -789,6 +916,7 @@ def test_default_voice_provider_factory_builds_a_real_elevenlabs_provider(
 
 
 def test_default_image_provider_factory_builds_a_real_openai_provider(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Exercises `_default_image_provider_factory`'s deferred import
@@ -811,7 +939,7 @@ def test_default_image_provider_factory_builds_a_real_openai_provider(
     )
 
     exit_code = main(
-        ["create", "story", "--topic", "Anything"],
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
         settings_loader=_settings_loader_with_all_api_keys,
         provider_factory=factory,
         voice_provider_factory=voice_factory,

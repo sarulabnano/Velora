@@ -5,13 +5,13 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-016 — Engines: `SceneImageEngine`; Workflows: `StoryWorkflow`
-coordina sus tres Engines.**
+**PR-017 — CLI: `velora create story` persiste su resultado a disco.**
 
 ## Milestone activa
 
-**Workflows** (`StoryWorkflow`, ahora coordinando texto + audio +
-imágenes). Próxima: por decidir contigo — ver "Próximo paso".
+**CLI / entregable de punta a punta.** El pipeline completo
+(texto → audio → imágenes → disco) ya está cerrado. Próxima: por
+decidir contigo — ver "Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -28,77 +28,63 @@ Discrepancias con lo construido se resuelven vía ADR.
 ## Componentes que existen hoy
 
 - `velora` — paquete raíz, expone `__version__`.
-- `velora.cli` — **cambia**: `create story` construye ahora también un
-  `ImageProvider` (por defecto, `OpenAIImageProvider`) y lo registra
-  como tercer `LifecycleComponent` del mismo `Runtime` dedicado.
-  Requiere `VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`, **y**
-  `VELORA_OPENAI_API_KEY` — falla rápido con un mensaje `fatal` si falta
-  cualquiera de las tres. Imprime, por escena: el texto, y una línea
-  para el audio y otra para la imagen (tamaño en bytes, formato).
-- `velora.runtime`, `velora.logging` — sin cambios.
-- `velora.configuration` — **cambia**: `VeloraSettings` gana
-  `openai_api_key: str | None = None`, leído de
-  `VELORA_OPENAI_API_KEY` — mismo tratamiento opcional-hasta-el-punto-
-  de-uso que las otras dos claves.
+- `velora.cli` — **cambia**: `create story` gana un argumento
+  `--output-dir` (por defecto, `.`). Tras ejecutar `StoryWorkflow` con
+  éxito, escribe un subdirectorio nuevo (nombrado con el `runtime_id`
+  de esa ejecución) con: `story.txt` (transcripción), y un archivo de
+  audio y uno de imagen por escena (`scene_{index:03d}.{formato}`). Un
+  fallo escribiendo a disco se reporta como `fatal`, igual que
+  cualquier otro fallo. La salida de stdout ahora imprime los nombres
+  de archivo guardados por escena, y la ruta completa del directorio.
+- `velora.runtime`, `velora.logging`, `velora.configuration` — sin
+  cambios funcionales.
 - `velora.services` (raíz), `velora.services.narration`,
   `velora.services.voice`, `velora.services.image` — sin cambios.
 - `velora.providers` (raíz), `velora.providers.text_generation`,
   `velora.providers.voice`, `velora.providers.image` — sin cambios.
-- `velora.engines.story`, `velora.engines.narration_audio` — sin
-  cambios.
-- `velora.engines.scene_image` — **nuevo**: tercer Engine.
-  `SceneImageEngine.illustrate(story: Story) -> StoryImages`, generando
-  una imagen por escena vía `ImageService` inyectado. Tipos nuevos:
-  `SceneImage` (`index`, `image`, `image_format`), `StoryImages`
-  (`topic`, `scenes`). Usa el texto de cada escena como prompt, tal
-  cual, sin reescritura.
-- `velora.workflows.story` — **cambia**: `StoryWorkflow.__init__` recibe
-  ahora `StoryEngine`, `NarrationAudioEngine`, **y** `SceneImageEngine`.
-  `NarratedStory` gana un tercer campo, `images: StoryImages`. `run()`
-  construye, sintetiza, e ilustra, en ese orden.
+- `velora.engines.story`, `velora.engines.narration_audio`,
+  `velora.engines.scene_image` — sin cambios.
+- `velora.workflows.story` — sin cambios: la persistencia vive
+  enteramente en `velora.cli`, no en `StoryWorkflow`.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Estado real del producto — qué se puede hacer hoy
 
-Actualizado desde PR-015, ahora que las tres piezas están conectadas:
-
 - **Solo texto**: `StoryEngine` por sí solo. Funciona.
-- **Texto + audio**: `StoryEngine` + `NarrationAudioEngine` a mano, o
-  construyendo `StoryWorkflow` sin pasar por la CLI. Funciona.
-- **Texto + audio + imágenes**: **funciona de punta a punta**, tanto en
-  Python directo (`StoryWorkflow` con los tres Engines) como desde la
-  CLI (`velora create story`, que ahora requiere las tres claves de
-  API). Nada se guarda a disco automáticamente — la CLI reporta tamaño
-  y formato por escena, no escribe archivos.
+- **Texto + audio + imágenes, en memoria**: `StoryWorkflow` con los
+  tres Engines, sin pasar por la CLI. Funciona.
+- **Texto + audio + imágenes, persistido a disco**: `velora create
+  story` desde la CLI (requiere las tres claves de API). **Funciona de
+  punta a punta** — produce un directorio autocontenido
+  (`story.txt` + un archivo de audio y uno de imagen por escena) que el
+  usuario puede abrir directamente, sin ningún paso manual adicional.
 
 ## Componentes que NO existen todavía
 
 Extensions. Tampoco más Providers de ningún dominio existente, más
 dominios de Provider (video, música, traducción), más Engines
 (Subtitle, Timeline, Render, Publish), ni más Workflows que
-`StoryWorkflow`. Ningún mecanismo para persistir a disco lo que
-`StoryWorkflow` produce (ni audio ni imágenes) — `create story` lo
-reporta, no lo guarda.
+`StoryWorkflow`. Ningún mecanismo para reanudar o reutilizar una
+ejecución anterior desde su directorio guardado — cada ejecución de
+`create story` es independiente.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0018** — ver PRs anteriores; sin cambios.
-- **ADR-0019** — `SceneImageEngine`, mismo patrón exacto que ADR-0015
-  (`NarrationAudioEngine`): entrada `Story` ya validada, sin
-  precondición propia, sin agregación de errores, depende de
-  `ImageService` nunca de `ImageProvider` directamente. Tipo contenedor
-  nombrado `StoryImages` (plural), no `StoryImage` — única desviación
-  deliberada del espejo con `SceneAudio`/`StoryAudio`, porque "imágenes"
-  es un sustantivo contable y "audio" no. El prompt de cada imagen es
-  el texto de la escena tal cual, sin reescritura, hasta que exista un
-  consumidor real que la necesite. `StoryWorkflow` coordina ahora los
-  tres Engines, en el orden que documenta `docs/VISION.md`;
-  `NarratedStory` compone los tres resultados. `create story` exige las
-  tres claves de API. Vinculante para cualquier Engine futuro que reciba
-  una `Story` ya construida: mismo patrón, un nombre de tipo contenedor
-  elegido por precisión gramatical del dominio, no copiado
-  mecánicamente.
+- **ADR-0001** a **ADR-0019** — ver PRs anteriores; sin cambios.
+- **ADR-0020** — `create story` persiste su resultado a disco.
+  `--output-dir` (por defecto `.`); cada ejecución crea un
+  subdirectorio propio nombrado con el `runtime_id` que el `Runtime` de
+  esa ejecución ya genera (sin inventar un segundo identificador).
+  Contenido: `story.txt` (transcripción) + un archivo de audio y uno de
+  imagen por escena, con índice de tres dígitos para preservar el orden
+  alfabético. La persistencia vive enteramente en `velora.cli` — ningún
+  Engine, Service, o Provider, ni `StoryWorkflow` mismo, saben que su
+  resultado terminará en disco. Un fallo de E/S (`OSError`) se reporta
+  igual que cualquier otro fallo `fatal`, antes de imprimir el resto de
+  la salida. Vinculante para cualquier persistencia futura de otro
+  Workflow: la misma capa (CLI), el mismo principio (todo o nada,
+  reutilizar identificadores que ya existen en vez de inventar nuevos).
 
 ## Criterios de aceptación vigentes
 
@@ -111,33 +97,30 @@ uv run velora
 uv run pytest
 ```
 
-El Core mantiene cobertura de pruebas ≥90%; PR-016 cierra con 100%.
-`velora create story --topic "..."` ahora requiere las tres claves de
-API (`VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`,
-`VELORA_OPENAI_API_KEY`) en el entorno para completarse con éxito.
+El Core mantiene cobertura de pruebas ≥90%; PR-017 cierra con 100%.
+`velora create story --topic "..."` ahora escribe su resultado a disco
+por defecto en el directorio actual (configurable con `--output-dir`).
 
 ## Próximo paso
 
-Con los tres pasos del pipeline de `docs/VISION.md` hasta "generar
-imagenes" ya coordinados por `StoryWorkflow`, quedan varios caminos
-razonables para `Genera PR-017` — no mutuamente excluyentes:
+Con el pipeline completo cerrado de punta a punta — texto, audio,
+imágenes, y ahora persistencia — el "primer resultado tangible" que
+`PROJECT_CONTEXT.md` venía posponiendo desde PR-013 ya no es un
+pendiente. Quedan varios caminos razonables para `Genera PR-018`, todos
+genuinamente abiertos por primera vez en muchos PRs, sin una
+inclinación tan clara como en decisiones anteriores:
 
-1. **Persistir a disco desde la CLI** (audio e imágenes, no solo
-   reportar tamaño/formato) — sigue pendiente desde PR-013, pospuesta
-   tres veces ya. Es el primer resultado verdaderamente entregable de
-   todo el pipeline construido hasta ahora.
-2. **Un Engine nuevo que dependa de los tres resultados existentes**
-   (p. ej. Subtitle Engine, según `docs/VISION.md`) — por primera vez
-   hay tanto `StoryAudio` como `StoryImages` reales de los que depender,
-   no solo texto.
-3. **Un cuarto dominio de Provider/Service** (video, música,
-   traducción) — sigue disponible, aunque ya se demostró tres veces
-   que conviene darle a cada dominio un consumidor real antes de abrir
-   uno nuevo.
+1. **Un Engine nuevo que dependa de `StoryAudio`/`StoryImages`** (p.
+   ej. Subtitle Engine, según `docs/VISION.md`) — el pipeline documentado
+   sigue con "construir timeline" y "renderizar" después de "generar
+   imagenes".
+2. **Un cuarto dominio de Provider/Service** (video, música,
+   traducción) — sigue disponible, con el mismo patrón ya demostrado
+   tres veces.
+3. **Mejoras al propio `create story`** — por ejemplo, permitir
+   reanudar/reintentar una ejecución fallida, o exportar en otros
+   formatos — ninguna urgente, pero ahora que hay un entregable real,
+   son las primeras mejoras "de producto" genuinamente posibles.
 
-Mi inclinación, si preguntas: opción 1. Es la más pospuesta de las tres,
-y sin ella, todo lo construido hasta ahora sigue siendo una
-demostración interna — nada de lo que `StoryWorkflow` produce hoy
-sobrevive fuera de la sesión que lo invocó. Pero, igual que en
-decisiones anteriores de secuencia (no de diseño concreto), dímelo y
-sigo.
+Sin inclinación fuerte de mi parte esta vez — las tres son razonables y
+el pipeline ya es funcional; dime hacia dónde prefieres llevarlo y sigo.
