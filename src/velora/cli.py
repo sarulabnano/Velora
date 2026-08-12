@@ -35,6 +35,14 @@ scene, under `<output-dir>/<runtime-id>/` — `<output-dir>` defaults to
 the current directory; `<runtime-id>` is the same id the Runtime itself
 already generates per run, reused rather than inventing a second
 identifier.
+
+Since PR-018 (ADR-0021), `create story` runs the further extended
+`StoryWorkflow`: `StoryEngine`, `NarrationAudioEngine`,
+`SceneImageEngine`, and `SubtitleEngine`. Unlike the other three,
+`SubtitleEngine` needs no Provider and requires no API key — it's
+constructed directly, with no factory to inject and no
+`LifecycleComponent` to register on the Runtime. `create story` also
+now saves a `story.srt` file alongside the transcript.
 """
 
 from __future__ import annotations
@@ -136,6 +144,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "inside it (default: current directory)."
         ),
     )
+    story_parser.add_argument(
+        "--words-per-minute",
+        type=float,
+        default=150.0,
+        help=("Estimated narration pace, used to time the generated subtitles (default: 150.0)."),
+    )
 
     return parser
 
@@ -233,15 +247,19 @@ def _default_workflow_runtime_factory(
 
 
 def _save_narrated_story(narrated_story: NarratedStory, output_dir: Path) -> None:
-    """Persist a `NarratedStory` to `output_dir` (ADR-0020).
+    """Persist a `NarratedStory` to `output_dir` (ADR-0020, ADR-0021).
 
     Writes one `scene_{index:03d}.{format}` file per scene for both
-    `narrated_story.audio` and `narrated_story.images`, plus a
-    `story.txt` transcript (the topic and every scene's text, the same
-    content `_run_create_story` already prints to stdout) — so
-    `output_dir` alone is a complete, self-contained deliverable: audio,
-    images, and the text that ties them together, not just the binary
-    artifacts.
+    `narrated_story.audio` and `narrated_story.images`, a `story.txt`
+    transcript (the topic and every scene's text, the same content
+    `_run_create_story` already prints to stdout), and a single
+    `story.srt` file (all scenes' captions, via
+    `velora.engines.subtitle.render_srt`) — one shared file, not one per
+    scene, since an SRT file's cues already carry their own scene
+    boundaries; splitting it per scene would only make it harder to load
+    into a video editor as a single subtitle track. `output_dir` alone
+    is a complete, self-contained deliverable: audio, images, captions,
+    and the text that ties them together, not just the binary artifacts.
 
     `output_dir` is created (with any missing parents) if it doesn't
     exist yet — mirrors `mkdir -p`, since a fresh, generated
@@ -257,6 +275,10 @@ def _save_narrated_story(narrated_story: NarratedStory, output_dir: Path) -> Non
     for scene in story.scenes:
         transcript_lines.append(f"[{scene.index}] {scene.text}")
     (output_dir / "story.txt").write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
+
+    from velora.engines.subtitle import render_srt
+
+    (output_dir / "story.srt").write_text(render_srt(narrated_story.subtitles), encoding="utf-8")
 
     for scene_audio in narrated_story.audio.scenes:
         path = output_dir / f"scene_{scene_audio.index:03d}.{scene_audio.audio_format}"
@@ -329,6 +351,7 @@ def _run_create_story(
     from velora.engines.narration_audio import NarrationAudioEngine
     from velora.engines.scene_image import SceneImageEngine
     from velora.engines.story import StoryEngine
+    from velora.engines.subtitle import SubtitleEngine
     from velora.services.image import ImageService
     from velora.services.narration import NarrationService
     from velora.services.voice import VoiceService
@@ -341,6 +364,7 @@ def _run_create_story(
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(voice_provider)),
         SceneImageEngine(ImageService(image_provider)),
+        SubtitleEngine(words_per_minute=args.words_per_minute),
     )
 
     runtime = workflow_runtime_factory(
@@ -363,6 +387,7 @@ def _run_create_story(
     story = narrated_story.story
     print(f"Story: {story.topic} ({len(story.scenes)} scene(s))")
     print(f"Saved to: {output_dir}")
+    print("Subtitles: story.srt")
     for scene, scene_audio, scene_image in zip(
         story.scenes, narrated_story.audio.scenes, narrated_story.images.scenes, strict=True
     ):

@@ -423,6 +423,72 @@ def test_create_story_saves_a_transcript_and_one_file_per_scene(tmp_path: Path) 
     assert (output_dir / "scene_000.png").read_bytes() == b"The city wakes."
     assert (output_dir / "scene_001.png").read_bytes() == b"Night falls."
 
+    srt = (output_dir / "story.srt").read_text(encoding="utf-8")
+    assert "1\n" in srt
+    assert "The city wakes." in srt
+    assert "Night falls." in srt
+    assert "-->" in srt
+
+
+def test_create_story_prints_the_subtitles_filename(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    provider = _FakeTextGenerationProvider("A scene.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Subtitles: story.srt" in captured.out
+
+
+def test_create_story_words_per_minute_affects_subtitle_timing(tmp_path: Path) -> None:
+    provider = _FakeTextGenerationProvider(" ".join(["word"] * 60))
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        [
+            "create",
+            "story",
+            "--topic",
+            "Anything",
+            "--output-dir",
+            str(tmp_path),
+            "--words-per-minute",
+            "60",
+        ],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+    assert exit_code == 0
+
+    output_dir = next(tmp_path.iterdir())
+    srt = (output_dir / "story.srt").read_text(encoding="utf-8")
+    # 60 words at 60 words/minute (1 word/second) should take about a minute.
+    assert "00:01:00,000" in srt
+
+
+def test_create_story_words_per_minute_defaults_to_150() -> None:
+    from velora.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["create", "story", "--topic", "Anything"])
+
+    assert args.words_per_minute == 150.0
+
 
 def test_create_story_prints_the_output_directory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

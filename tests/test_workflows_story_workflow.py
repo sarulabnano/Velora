@@ -16,6 +16,7 @@ import pytest
 from velora.engines.narration_audio import NarrationAudioEngine
 from velora.engines.scene_image import SceneImageEngine
 from velora.engines.story import StoryEngine
+from velora.engines.subtitle import SubtitleEngine
 from velora.providers import ProviderRequestError
 from velora.providers.image import ImageRequest, ImageResult
 from velora.providers.text_generation import TextGenerationRequest, TextGenerationResult
@@ -78,6 +79,7 @@ def _workflow(
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(voice_provider)),
         SceneImageEngine(ImageService(image_provider)),
+        SubtitleEngine(),
     )
     return workflow, text_provider, voice_provider, image_provider
 
@@ -151,6 +153,18 @@ def test_each_built_scenes_text_is_sent_to_the_image_provider_as_the_prompt() ->
     ]
 
 
+def test_run_captions_every_scene_in_order() -> None:
+    workflow, _, _, _ = _workflow("The city wakes.\n\nThe market opens.")
+
+    narrated_story = workflow.run("A day in the city")
+
+    assert [s.text for s in narrated_story.subtitles.scenes] == [
+        "The city wakes.",
+        "The market opens.",
+    ]
+    assert [s.index for s in narrated_story.subtitles.scenes] == [0, 1]
+
+
 def test_max_tokens_is_passed_through_to_the_story_engine() -> None:
     workflow, text_provider, _, _ = _workflow("Some narration.")
 
@@ -187,6 +201,7 @@ def test_blank_narration_produces_a_narrated_story_with_zero_scenes() -> None:
     assert narrated_story.story.scenes == ()
     assert narrated_story.audio.scenes == ()
     assert narrated_story.images.scenes == ()
+    assert narrated_story.subtitles.scenes == ()
     assert voice_provider.received_requests == []
     assert image_provider.received_requests == []
 
@@ -197,6 +212,7 @@ def test_a_failing_synthesis_propagates_and_returns_no_narrated_story() -> None:
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(_FailingVoiceProvider())),
         SceneImageEngine(ImageService(_FakeImageProvider())),
+        SubtitleEngine(),
     )
 
     with pytest.raises(ProviderRequestError):
@@ -209,6 +225,7 @@ def test_a_failing_illustration_propagates_and_returns_no_narrated_story() -> No
         StoryEngine(NarrationService(text_provider)),
         NarrationAudioEngine(VoiceService(_FakeVoiceProvider())),
         SceneImageEngine(ImageService(_FailingImageProvider())),
+        SubtitleEngine(),
     )
 
     with pytest.raises(ProviderRequestError):
@@ -244,6 +261,7 @@ def test_works_identically_with_any_conforming_providers() -> None:
         StoryEngine(NarrationService(_AnotherFakeTextGenerationProvider())),
         NarrationAudioEngine(VoiceService(_AnotherFakeVoiceProvider())),
         SceneImageEngine(ImageService(_AnotherFakeImageProvider())),
+        SubtitleEngine(),
     )
 
     narrated_story = workflow.run("Anything")
@@ -253,3 +271,6 @@ def test_works_identically_with_any_conforming_providers() -> None:
     assert narrated_story.audio.scenes[0].audio_format == "wav"
     assert narrated_story.images.scenes[0].image == b"a-completely-different-backend"
     assert narrated_story.images.scenes[0].image_format == "webp"
+    assert (
+        narrated_story.subtitles.scenes[0].text == "A completely different backend narrated this."
+    )

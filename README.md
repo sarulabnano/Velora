@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: CLI — `create story` persiste su resultado a disco** (PR-017). Ver
+**Fase: Engines — `SubtitleEngine`; Workflows — `StoryWorkflow` coordina sus cuatro Engines** (PR-018). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -224,22 +224,39 @@ for scene_image in story_images.scenes:
         f.write(scene_image.image)
 ```
 
+`SubtitleEngine` es el cuarto, y el único sin Provider ni Service — no
+hay nada externo que llamar. Estima el tiempo de cada escena por ritmo
+de lectura:
+
+```python
+from velora.engines.subtitle import SubtitleEngine, render_srt
+
+subtitle_engine = SubtitleEngine(words_per_minute=150.0)  # sin Service, sin Provider
+story_subtitles = subtitle_engine.caption(story)  # la misma Story de arriba
+
+with open("story.srt", "w", encoding="utf-8") as f:
+    f.write(render_srt(story_subtitles))
+```
+
 ## Workflows
 
-`StoryWorkflow` es el primer Workflow, y desde PR-016 coordina los tres
-Engines de arriba: envuelve un `StoryEngine`, un `NarrationAudioEngine`,
-y un `SceneImageEngine` inyectados, y ejecuta el pipeline completo
-(`docs/VISION.md`: "Los Workflows conectan todos los motores"):
+`StoryWorkflow` es el primer Workflow, y desde PR-018 coordina los
+cuatro Engines de arriba: envuelve un `StoryEngine`, un
+`NarrationAudioEngine`, un `SceneImageEngine`, y un `SubtitleEngine`
+inyectados, y ejecuta el pipeline completo (`docs/VISION.md`: "Los
+Workflows conectan todos los motores"):
 
 ```python
 from velora.workflows.story import StoryWorkflow
 
-workflow = StoryWorkflow(engine, audio_engine, image_engine)  # los mismos Engines de arriba
+# los mismos Engines de arriba
+workflow = StoryWorkflow(engine, audio_engine, image_engine, subtitle_engine)
 narrated_story = workflow.run("The history of the printing press")
 
 story = narrated_story.story
 story_audio = narrated_story.audio
 story_images = narrated_story.images
+story_subtitles = narrated_story.subtitles
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
@@ -256,6 +273,7 @@ uv run velora create story --topic "The history of the printing press" \
 ```
 Story: The history of the printing press (3 scene(s))
 Saved to: output/3f2a9e1c-...
+Subtitles: story.srt
 
 [0] ...
     audio: scene_000.mp3
@@ -267,6 +285,10 @@ Saved to: output/3f2a9e1c-...
     audio: scene_002.mp3
     image: scene_002.png
 ```
+
+`SubtitleEngine` no requiere ninguna clave de API adicional. El ritmo
+de lectura usado para estimar el tiempo de cada escena es configurable
+con `--words-per-minute` (por defecto, `150.0`).
 
 `--output-dir` es opcional (por defecto, el directorio actual). Cada
 ejecución crea su propio subdirectorio, nombrado con el `runtime_id` de

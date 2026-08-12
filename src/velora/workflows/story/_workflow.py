@@ -1,17 +1,13 @@
 """StoryWorkflow: orchestrates the Engines needed to turn a topic into a
-narrated, synthesized, illustrated Story.
+narrated, synthesized, illustrated, captioned Story.
 
 ``docs/VISION.md``: "Los Workflows conectan todos los motores." Through
-PR-012 that was exactly one motor -- ``StoryEngine`` -- the smallest
-possible real Workflow (ADR-0012). Since PR-013 (ADR-0016), with a
-second Engine real (``NarrationAudioEngine``), ``StoryWorkflow``
-coordinated both. Since PR-016 (ADR-0019), with a third Engine real
-(``SceneImageEngine``), it coordinates all three: it builds a
-:class:`~velora.engines.story.Story` via ``StoryEngine``, synthesizes it
-into :class:`~velora.engines.narration_audio.StoryAudio` via
-``NarrationAudioEngine``, and illustrates it into
-:class:`~velora.engines.scene_image.StoryImages` via
-``SceneImageEngine`` -- in that order.
+PR-012 that was exactly one motor -- ``StoryEngine``. Since PR-013
+(ADR-0016), ``NarrationAudioEngine`` joined it; since PR-016
+(ADR-0019), ``SceneImageEngine``. Since PR-018 (ADR-0021),
+``SubtitleEngine`` joins as a fourth -- the first with no Provider of
+its own to coordinate, since it needs nothing beyond the ``Story``
+already built.
 """
 
 from __future__ import annotations
@@ -24,6 +20,7 @@ if TYPE_CHECKING:
     from velora.engines.narration_audio import NarrationAudioEngine
     from velora.engines.scene_image import SceneImageEngine
     from velora.engines.story import StoryEngine
+    from velora.engines.subtitle import SubtitleEngine
 
 __all__ = ["NarratedStory", "StoryWorkflow"]
 
@@ -33,12 +30,13 @@ class StoryWorkflow:
     :class:`~velora.workflows.story.NarratedStory`.
 
     Wraps an injected :class:`~velora.engines.story.StoryEngine`,
-    :class:`~velora.engines.narration_audio.NarrationAudioEngine`, and
-    :class:`~velora.engines.scene_image.SceneImageEngine` -- never
-    constructs any of them internally, and never imports
-    ``velora.services`` or ``velora.providers`` directly (that would
-    skip a layer of ADR-0012's canonical diagram, the same diagram
-    ADR-0008 established for Engines/Services/Providers).
+    :class:`~velora.engines.narration_audio.NarrationAudioEngine`,
+    :class:`~velora.engines.scene_image.SceneImageEngine`, and
+    :class:`~velora.engines.subtitle.SubtitleEngine` -- never constructs
+    any of them internally, and never imports ``velora.services`` or
+    ``velora.providers`` directly (that would skip a layer of
+    ADR-0012's canonical diagram, the same diagram ADR-0008 established
+    for Engines/Services/Providers).
     """
 
     def __init__(
@@ -46,38 +44,36 @@ class StoryWorkflow:
         story_engine: StoryEngine,
         narration_audio_engine: NarrationAudioEngine,
         scene_image_engine: SceneImageEngine,
+        subtitle_engine: SubtitleEngine,
     ) -> None:
         self._story_engine = story_engine
         self._narration_audio_engine = narration_audio_engine
         self._scene_image_engine = scene_image_engine
+        self._subtitle_engine = subtitle_engine
 
     def run(self, topic: str, *, max_tokens: int = 1024) -> NarratedStory:
         """Run the Workflow for ``topic``.
 
         Builds the :class:`~velora.engines.story.Story` first, then
-        synthesizes it, then illustrates it -- the same order
-        ``docs/VISION.md``'s example pipeline lists ("dividir escenas"
-        before "generar voz" before "generar imagenes"), and the only
-        order that makes sense: both synthesis and illustration need the
-        scenes the first step produces. Synthesis runs before
-        illustration only because that is the order PR-013 (ADR-0016)
-        already established for the first two Engines; illustration does
-        not depend on the audio in any way -- a future PR could
-        parallelize or reorder these two without changing either
-        Engine's contract.
+        synthesizes, illustrates, and captions it, in that order. Only
+        the first step is a genuine dependency of the rest -- synthesis,
+        illustration, and captioning each depend only on the already-
+        built ``Story``, not on each other, exactly as ADR-0019 already
+        noted for synthesis versus illustration; captioning extends the
+        same observation to a third, independent step.
 
         Returns a :class:`~velora.workflows.story.NarratedStory`,
-        composing all three Engines' results, rather than the
-        two-Engine version this method returned through PR-013 --
-        the same "compose, don't flatten" resolution ADR-0016 already
-        established, extended to a third Engine (ADR-0019).
+        composing all four Engines' results -- the same "compose,
+        don't flatten" resolution ADR-0016 established and ADR-0019
+        already extended once, extended again here (ADR-0021).
 
         :raises ValueError: ``topic`` is empty or only whitespace.
         :raises ~velora.providers.VeloraProviderError: any underlying
             Provider failed -- see its own error hierarchy for
             specifics (authentication, rate limiting, connection, or
-            other). A failure synthesizing or illustrating leaves
-            whatever was already built undelivered: no partial
+            other). Captioning has no Provider of its own and cannot
+            fail this way. A failure synthesizing or illustrating
+            leaves whatever was already built undelivered: no partial
             ``NarratedStory`` is returned, the same "no partial result"
             stance ``NarrationAudioEngine`` and ``SceneImageEngine``
             themselves already take per scene (ADR-0015, ADR-0019).
@@ -85,4 +81,5 @@ class StoryWorkflow:
         story = self._story_engine.build_story(topic, max_tokens=max_tokens)
         audio = self._narration_audio_engine.synthesize(story)
         images = self._scene_image_engine.illustrate(story)
-        return NarratedStory(story=story, audio=audio, images=images)
+        subtitles = self._subtitle_engine.caption(story)
+        return NarratedStory(story=story, audio=audio, images=images, subtitles=subtitles)
