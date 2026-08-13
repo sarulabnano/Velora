@@ -4,10 +4,11 @@ narrated, synthesized, illustrated, captioned Story.
 ``docs/VISION.md``: "Los Workflows conectan todos los motores." Through
 PR-012 that was exactly one motor -- ``StoryEngine``. Since PR-013
 (ADR-0016), ``NarrationAudioEngine`` joined it; since PR-016
-(ADR-0019), ``SceneImageEngine``. Since PR-018 (ADR-0021),
-``SubtitleEngine`` joins as a fourth -- the first with no Provider of
-its own to coordinate, since it needs nothing beyond the ``Story``
-already built.
+(ADR-0019), ``SceneImageEngine``; since PR-018 (ADR-0021),
+``SubtitleEngine``. Since PR-019 (ADR-0022), captioning genuinely
+depends on synthesis -- unlike illustration, it needs the audio
+``NarrationAudioEngine`` already produced to time each caption
+accurately, not only the ``Story`` itself.
 """
 
 from __future__ import annotations
@@ -55,17 +56,19 @@ class StoryWorkflow:
         """Run the Workflow for ``topic``.
 
         Builds the :class:`~velora.engines.story.Story` first, then
-        synthesizes, illustrates, and captions it, in that order. Only
-        the first step is a genuine dependency of the rest -- synthesis,
-        illustration, and captioning each depend only on the already-
-        built ``Story``, not on each other, exactly as ADR-0019 already
-        noted for synthesis versus illustration; captioning extends the
-        same observation to a third, independent step.
+        synthesizes, illustrates, and captions it, in that order.
+        Illustration depends only on the already-built ``Story``, same
+        as synthesis -- but since PR-019 (ADR-0022), captioning is no
+        longer independent of the other two: it needs the
+        already-synthesized audio to time each caption against, so it
+        must run after synthesis. It still doesn't depend on
+        illustration, which is why illustration is free to run before
+        or after captioning without changing either's result.
 
         Returns a :class:`~velora.workflows.story.NarratedStory`,
         composing all four Engines' results -- the same "compose,
         don't flatten" resolution ADR-0016 established and ADR-0019
-        already extended once, extended again here (ADR-0021).
+        already extended once, extended again in ADR-0021.
 
         :raises ValueError: ``topic`` is empty or only whitespace.
         :raises ~velora.providers.VeloraProviderError: any underlying
@@ -81,5 +84,5 @@ class StoryWorkflow:
         story = self._story_engine.build_story(topic, max_tokens=max_tokens)
         audio = self._narration_audio_engine.synthesize(story)
         images = self._scene_image_engine.illustrate(story)
-        subtitles = self._subtitle_engine.caption(story)
+        subtitles = self._subtitle_engine.caption(story, audio)
         return NarratedStory(story=story, audio=audio, images=images, subtitles=subtitles)

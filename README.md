@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Engines — `SubtitleEngine`; Workflows — `StoryWorkflow` coordina sus cuatro Engines** (PR-018). Ver
+**Fase: Engines — `SubtitleEngine` cronometra por duración real del audio** (PR-019). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -225,18 +225,22 @@ for scene_image in story_images.scenes:
 ```
 
 `SubtitleEngine` es el cuarto, y el único sin Provider ni Service — no
-hay nada externo que llamar. Estima el tiempo de cada escena por ritmo
-de lectura:
+llama a nada externo. Cronometra cada escena con la duración real de su
+audio ya generado:
 
 ```python
 from velora.engines.subtitle import SubtitleEngine, render_srt
 
-subtitle_engine = SubtitleEngine(words_per_minute=150.0)  # sin Service, sin Provider
-story_subtitles = subtitle_engine.caption(story)  # la misma Story de arriba
+subtitle_engine = SubtitleEngine()  # sin Service, sin Provider
+story_subtitles = subtitle_engine.caption(story, story_audio)  # Story y StoryAudio de arriba
 
 with open("story.srt", "w", encoding="utf-8") as f:
     f.write(render_srt(story_subtitles))
 ```
+
+`words_per_minute` (por defecto `150.0`) es un *fallback*, no el método
+principal: solo se usa si la duración de una escena en particular no
+puede medirse desde su audio (formato no soportado, o corrupto).
 
 ## Workflows
 
@@ -256,7 +260,7 @@ narrated_story = workflow.run("The history of the printing press")
 story = narrated_story.story
 story_audio = narrated_story.audio
 story_images = narrated_story.images
-story_subtitles = narrated_story.subtitles
+story_subtitles = narrated_story.subtitles  # cronometrados por la duración real de story_audio
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
@@ -286,9 +290,11 @@ Subtitles: story.srt
     image: scene_002.png
 ```
 
-`SubtitleEngine` no requiere ninguna clave de API adicional. El ritmo
-de lectura usado para estimar el tiempo de cada escena es configurable
-con `--words-per-minute` (por defecto, `150.0`).
+`SubtitleEngine` no requiere ninguna clave de API adicional. Desde
+PR-019, el tiempo de cada subtítulo se mide directamente de la
+duración real del audio generado; `--words-per-minute` (por defecto,
+`150.0`) solo aplica como reserva para una escena cuya duración no
+pueda medirse.
 
 `--output-dir` es opcional (por defecto, el directorio actual). Cada
 ejecución crea su propio subdirectorio, nombrado con el `runtime_id` de

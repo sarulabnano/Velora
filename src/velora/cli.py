@@ -43,6 +43,11 @@ Since PR-018 (ADR-0021), `create story` runs the further extended
 constructed directly, with no factory to inject and no
 `LifecycleComponent` to register on the Runtime. `create story` also
 now saves a `story.srt` file alongside the transcript.
+
+Since PR-019 (ADR-0022), subtitle timing is measured from each scene's
+real synthesized audio rather than estimated from word count alone;
+`--words-per-minute` now only controls the fallback rate used when a
+scene's duration can't be measured.
 """
 
 from __future__ import annotations
@@ -148,7 +153,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--words-per-minute",
         type=float,
         default=150.0,
-        help=("Estimated narration pace, used to time the generated subtitles (default: 150.0)."),
+        help=(
+            "Fallback narration pace for timing subtitles, used only "
+            "for a scene whose generated audio duration can't be "
+            "measured (default: 150.0)."
+        ),
     )
 
     return parser

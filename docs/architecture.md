@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Engines — `SubtitleEngine`; Workflows — `StoryWorkflow` coordina sus cuatro Engines
+## Estado: Engines — `SubtitleEngine` cronometra por duración real del audio
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -20,12 +20,13 @@ ImageService** (PR-015), **Engines — SceneImageEngine; Workflows —
 `StoryWorkflow` coordina los tres Engines** (PR-016), **CLI —
 persistencia a disco** (PR-017), **Engines — SubtitleEngine; Workflows
 — `StoryWorkflow` coordina los cuatro Engines; CLI — persiste
-`story.srt`** (PR-018). El pipeline de `create story` cubre ahora los
-cuatro Engines del pipeline de ejemplo de `docs/VISION.md` hasta
-"insertar subtítulos": texto, audio, imágenes, subtítulos, y su
-persistencia a disco. Fase siguiente: a decidir — medir la duración
-real del audio para el tiempo de los subtítulos, un Timeline Engine, o
-un cuarto dominio de Provider. Ver `PROJECT_CONTEXT.md`.
+`story.srt`** (PR-018), **Engines — `SubtitleEngine` mide la duración
+real del audio en vez de estimarla** (PR-019). El pipeline de `create
+story` cubre ahora los cuatro Engines del pipeline de ejemplo de
+`docs/VISION.md` hasta "insertar subtítulos", con subtítulos
+cronometrados con precisión sobre el audio real generado. Fase
+siguiente: a decidir — un Timeline Engine, o un cuarto dominio de
+Provider. Ver `PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -77,6 +78,7 @@ src/velora/
             __init__.py         # Superficie pública del Subtitle Engine
             _types.py              # SceneSubtitle, StorySubtitles
             _engine.py               # SubtitleEngine
+            _duration.py             # measure_duration_seconds
             _srt.py                  # render_srt
     workflows/
         __init__.py         # Namespace, sin lógica compartida todavía
@@ -93,7 +95,7 @@ tests/
     test_services_*.py            # 4 archivos (incluye narration, voice, image)
     test_providers_*.py           # 4 archivos (más 3 de voice, más 3 de image)
     test_engines_*.py             # 4 archivos (más 2 de narration_audio, más 2 de
-                                   # scene_image, más 3 de subtitle)
+                                   # scene_image, más 4 de subtitle)
     test_workflows_*.py           # 1 archivo
     test_no_direct_environ_access.py     # invariante ejecutable
 docs/
@@ -306,22 +308,35 @@ Tercer Engine (ADR-0019), mismo patrón exacto que
 
 ### `velora.engines.subtitle`
 
-Cuarto Engine (ADR-0021), y el primero sin Service ni Provider
-inyectado — no hay nada externo que llamar:
+Cuarto Engine (ADR-0021), sin Service inyectado — no llama a ningún
+Provider directamente. Desde PR-019 (ADR-0022), depende del tipo
+`StoryAudio` de `velora.engines.narration_audio` para cronometrar sus
+subtítulos con precisión:
 
 - **`SceneSubtitle`** (`index`, `text: str`, `start_seconds: float`,
   `end_seconds: float`) — a diferencia de `SceneAudio`/`SceneImage`, sí
   repite el texto de la escena: el texto *es* el artefacto, no hay un
   payload binario que lo sustituya. **`StorySubtitles`** (`topic`,
   `scenes`).
-- **`SubtitleEngine`** — sin Service inyectado; constructor recibe
-  `words_per_minute: float = 150.0`. `caption(story: Story) ->
-  StorySubtitles`: estima la duración de cada escena por conteo de
-  palabras y ritmo de lectura, back-to-back sin separación entre
-  escenas — no mide la duración real del audio que
-  `NarrationAudioEngine` produce (ADR-0021 documenta esto como
-  limitación conocida, no oculta). Única fuente de error: `ValueError`
-  si `words_per_minute` no es positivo, validado en el constructor.
+- **`measure_duration_seconds(audio: bytes) -> float | None`**
+  (`velora.engines.subtitle._duration`) — mide la duración real de un
+  clip de audio vía `mutagen` (lee metadata del contenedor, sin
+  decodificar el audio completo; detecta el formato por sus propios
+  bytes mágicos, sin necesitar nombre de archivo). Devuelve `None` —
+  nunca lanza — si `mutagen` no puede interpretar el audio (formato no
+  soportado, corrupto, o bytes que no son audio). `mutagen` es la
+  primera dependencia base no opcional del proyecto (ADR-0022):
+  distinta categoría que `anthropic`/`elevenlabs`/`openai` (SDKs de
+  proveedores intercambiables, extras opcionales) — es infraestructura
+  genérica sin vendor lock-in que el propio Core necesita.
+- **`SubtitleEngine`** — constructor recibe `words_per_minute: float =
+  150.0`, ahora un *fallback*, no el método principal de cronometraje.
+  `caption(story: Story, audio: StoryAudio) -> StorySubtitles`: para
+  cada escena, busca el `SceneAudio` correspondiente por `index` y mide
+  su duración real; si no existe o no puede medirse, cae al estimado
+  por conteo de palabras. Back-to-back sin separación entre escenas.
+  Única fuente de error: `ValueError` si `words_per_minute` no es
+  positivo, validado en el constructor — `caption()` en sí nunca lanza.
 - **`render_srt(subtitles: StorySubtitles) -> str`** — renderiza a
   formato SubRip (`.srt`), como función separada del tipo de resultado
   (`velora.engines.subtitle._srt`): el Engine no decide el formato de
@@ -344,10 +359,10 @@ desde PR-018 (ADR-0021) para coordinar los cuatro:
   `SubtitleEngine`, los cuatro inyectados. `run(topic: str, *,
   max_tokens=1024) -> NarratedStory`: construye la `Story` con
   `StoryEngine.build_story()`, la sintetiza, la ilustra, y la subtitula,
-  en ese orden — el orden que `docs/VISION.md` documenta para su
-  pipeline de ejemplo, aunque solo el primer paso es una dependencia
-  genuina de los otros tres (síntesis, ilustración, y subtitulado
-  dependen únicamente de la `Story` ya construida, no entre sí). Sin
+  en ese orden. Desde PR-019 (ADR-0022), el subtitulado deja de ser
+  independiente de la síntesis: `caption()` necesita el `StoryAudio` ya
+  producido para cronometrarse contra él, así que debe ejecutarse
+  después de `synthesize()` — sigue sin depender de la ilustración. Sin
   jerarquía de error propia: propaga `ValueError` (de `StoryEngine`) y
   `VeloraProviderError` (de cualquiera de los tres Providers
   subyacentes — el subtitulado no puede fallar así, no tiene Provider)
@@ -376,13 +391,15 @@ opcionales — se validan en el punto de uso, no al resolver
 Configuration; falla rápido si falta cualquiera de las tres, antes de
 construir ningún Provider) — sin ninguna clave nueva para
 `SubtitleEngine`. Gana el argumento `--words-per-minute` (por defecto
-`150.0`, igual que el Engine). Los imports de `anthropic`, `elevenlabs`,
-`openai`, `NarrationService`, `VoiceService`, `ImageService`,
-`StoryEngine`, `NarrationAudioEngine`, `SceneImageEngine`,
-`SubtitleEngine`, y `StoryWorkflow` viven dentro de las funciones que
-los usan, no a nivel de módulo: importar `velora.cli` (y ejecutar
-cualquier comando distinto de `create story`) nunca requiere los extras
-opcionales `velora[anthropic]`, `velora[elevenlabs]`, ni
+`150.0`), que desde PR-019 (ADR-0022) documenta explícitamente que es
+un ritmo de reserva, usado solo cuando la duración de una escena no
+puede medirse desde su audio generado. Los imports de `anthropic`,
+`elevenlabs`, `openai`, `NarrationService`, `VoiceService`,
+`ImageService`, `StoryEngine`, `NarrationAudioEngine`,
+`SceneImageEngine`, `SubtitleEngine`, y `StoryWorkflow` viven dentro de
+las funciones que los usan, no a nivel de módulo: importar `velora.cli`
+(y ejecutar cualquier comando distinto de `create story`) nunca
+requiere los extras opcionales `velora[anthropic]`, `velora[elevenlabs]`, ni
 `velora[openai]`.
 
 Desde PR-017 (ADR-0020), persiste su resultado a disco:
@@ -429,6 +446,8 @@ velora.engines.narration_audio  →  velora.engines.story  (solo el tipo `Story`
 velora.engines.scene_image  →  velora.services.image
 velora.engines.scene_image  →  velora.engines.story  (solo el tipo `Story`)
 velora.engines.subtitle  →  velora.engines.story  (solo el tipo `Story`)
+velora.engines.subtitle  →  velora.engines.narration_audio  (solo el tipo `StoryAudio`, desde PR-019)
+velora.engines.subtitle._duration  →  mutagen (dependencia base, no extra)
 velora.workflows.story  →  velora.engines.story
 velora.workflows.story  →  velora.engines.narration_audio
 velora.workflows.story  →  velora.engines.scene_image
@@ -443,8 +462,11 @@ canónico de ADR-0008. `velora.engines.narration_audio` y
 ambos dependen de `velora.engines.story` únicamente para el tipo
 `Story` que reciben como entrada, no para ninguna lógica.
 `velora.engines.subtitle` no depende de ningún `velora.services.*` en
-absoluto — solo de `velora.engines.story`, para el mismo tipo `Story`
-(ADR-0021: es el primer Engine sin Service ni Provider).
+absoluto — solo de `velora.engines.story` (por `Story`) y, desde PR-019
+(ADR-0022), de `velora.engines.narration_audio` (por `StoryAudio`, el
+único caso en todo `velora.engines` donde un Engine depende del tipo de
+resultado de *otro* Engine, no solo de `Story`) — sigue sin depender de
+ningún Service ni Provider (ADR-0021).
 `velora.workflows.story` sigue la misma regla: solo importa
 `velora.engines.story`, `velora.engines.narration_audio`,
 `velora.engines.scene_image`, y `velora.engines.subtitle`, nunca se
@@ -470,11 +492,9 @@ Extensions. Tampoco existen más Providers de imagen (Flux, Stable
 Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
 música, traducción). Más Engines (Timeline, Render, Publish — ver
 `docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
-existir. Ningún mecanismo para medir la duración real del audio y
-ajustar el tiempo de los subtítulos en consecuencia — sigue siendo una
-estimación por ritmo de lectura (ADR-0021). Ningún mecanismo para
-reanudar o reutilizar una ejecución anterior de `create story` desde su
-directorio ya guardado — cada ejecución es independiente. Cualquier
-mención a esas capas en otros documentos es planificación, no
-arquitectura vigente. Este documento se actualizará en cada PR que
+existir. Ningún mecanismo para reanudar o reutilizar una ejecución
+anterior de `create story` desde su directorio ya guardado — cada
+ejecución es independiente. Cualquier mención a esas capas en otros
+documentos es planificación, no arquitectura vigente. Este documento se
+actualizará en cada PR que
 introduzca una capa o dominio nuevo.

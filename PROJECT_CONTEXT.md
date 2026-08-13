@@ -5,14 +5,17 @@ Este documento resume el estado actual de Velora. No duplica los ADR ni
 
 ## Último PR
 
-**PR-018 — Engines: `SubtitleEngine`; Workflows: `StoryWorkflow`
-coordina sus cuatro Engines; CLI: persiste `story.srt`.**
+**PR-019 — Engines: `SubtitleEngine` cronometra por duración real del
+audio (`measure_duration_seconds`, vía `mutagen`), no por conteo de
+palabras.**
 
 ## Milestone activa
 
 **Engines / Workflows.** Los cuatro Engines del pipeline de ejemplo de
 `docs/VISION.md` hasta "insertar subtítulos" están coordinados por
-`StoryWorkflow`. Próxima: por decidir contigo — ver "Próximo paso".
+`StoryWorkflow`, y los subtítulos ahora coinciden genuinamente con la
+duración del audio generado. Próxima: por decidir contigo — ver
+"Próximo paso".
 
 ## Roadmap (congelado, no modificable)
 
@@ -28,12 +31,12 @@ Discrepancias con lo construido se resuelven vía ADR.
 
 ## Componentes que existen hoy
 
-- `velora` — paquete raíz, expone `__version__`.
-- `velora.cli` — **cambia**: `create story` construye ahora también un
-  `SubtitleEngine` (sin Provider, sin clave de API nueva). Gana el
-  argumento `--words-per-minute` (por defecto `150.0`). Persiste un
-  `story.srt` junto al resto de archivos, e imprime `Subtitles:
-  story.srt`.
+- `velora` — paquete raíz, expone `__version__`. **Cambia**: gana su
+  primera dependencia base no opcional, `mutagen` (antes,
+  `dependencies = []`).
+- `velora.cli` — **cambia**: el texto de ayuda de `--words-per-minute`
+  se actualiza para reflejar que ahora es un ritmo de reserva, no el
+  método principal de cronometraje.
 - `velora.runtime`, `velora.logging`, `velora.configuration` — sin
   cambios.
 - `velora.services` (raíz), `velora.services.narration`,
@@ -42,63 +45,60 @@ Discrepancias con lo construido se resuelven vía ADR.
   `velora.providers.voice`, `velora.providers.image` — sin cambios.
 - `velora.engines.story`, `velora.engines.narration_audio`,
   `velora.engines.scene_image` — sin cambios.
-- `velora.engines.subtitle` — **nuevo**: cuarto Engine, y el primero sin
-  Service ni Provider inyectado. `SubtitleEngine.caption(story: Story)
-  -> StorySubtitles`, estimando el tiempo de cada escena vía un ritmo
-  de lectura configurable (`words_per_minute`, por defecto `150.0`) —
-  no la duración real del audio. Tipos nuevos: `SceneSubtitle` (`index`,
-  `text`, `start_seconds`, `end_seconds` — a diferencia de
-  `SceneAudio`/`SceneImage`, sí repite el texto, porque el texto *es*
-  el artefacto), `StorySubtitles` (`topic`, `scenes`). `render_srt()`
-  renderiza a formato SubRip (.srt), como función separada del tipo de
-  resultado.
-- `velora.workflows.story` — **cambia**: `StoryWorkflow.__init__` recibe
-  ahora también `SubtitleEngine`. `NarratedStory` gana un cuarto campo,
-  `subtitles: StorySubtitles`. `run()` construye, sintetiza, ilustra, y
-  subtitula, en ese orden — solo el primer paso es una dependencia
-  genuina de los demás.
+- `velora.engines.subtitle` — **cambia**: `SubtitleEngine.caption()`
+  ahora recibe también `audio: StoryAudio` (firma incompatible con
+  PR-018, deliberado). Mide la duración real de cada `SceneAudio` vía
+  `measure_duration_seconds` (nuevo, `velora.engines.subtitle._duration`,
+  usa `mutagen`). `words_per_minute` pasa de ser la fuente principal de
+  cronometraje a un *fallback*, usado solo cuando la duración no puede
+  medirse (audio no soportado/corrupto, o sin escena de audio
+  correspondiente).
+- `velora.workflows.story` — **cambia**: `run()` pasa ahora `audio` a
+  `SubtitleEngine.caption()`. El orden síntesis → subtitulado deja de
+  ser incidental para ser una dependencia real (el subtitulado
+  necesita el audio ya sintetizado); sigue sin depender de la
+  ilustración.
 
 Ver `docs/architecture.md` para el detalle de cada símbolo.
 
 ## Estado real del producto — qué se puede hacer hoy
 
-- **Texto + audio + imágenes + subtítulos, persistido a disco**:
-  `velora create story` produce un directorio con `story.txt`,
-  `story.srt`, y un archivo de audio y uno de imagen por escena — listo
-  para cargar en un editor de video sin ningún paso manual adicional.
-- El tiempo de los subtítulos es una **estimación** basada en el texto
-  (ritmo de lectura configurable), no una medición del audio real
-  generado — documentado explícitamente como limitación conocida en
-  ADR-0021.
+- **Texto + audio + imágenes + subtítulos, cronometrados con precisión,
+  persistido a disco**: `velora create story` produce un directorio con
+  `story.txt`, `story.srt` (con tiempos que coinciden con la duración
+  real de cada clip de audio generado), y un archivo de audio y uno de
+  imagen por escena.
+- Ya no hay una limitación de "estimación por ritmo de lectura" para el
+  caso normal — solo se degrada a esa estimación si un clip de audio en
+  particular no puede leerse (caso excepcional, no el flujo esperado).
 
 ## Componentes que NO existen todavía
 
 Extensions. Tampoco más Providers/Services de ningún dominio existente,
 más dominios de Provider (video, música, traducción), más Engines
 (Timeline, Render, Publish — ver `docs/VISION.md`), ni más Workflows
-que `StoryWorkflow`. Ningún mecanismo para medir la duración real del
-audio y ajustar el tiempo de los subtítulos en consecuencia — sigue
-siendo una estimación por ritmo de lectura.
+que `StoryWorkflow`. Ningún mecanismo para reanudar o reutilizar una
+ejecución anterior de `create story` desde su directorio ya guardado.
 
 ## Decisiones vigentes (ADR)
 
-- **ADR-0001** a **ADR-0020** — ver PRs anteriores; sin cambios.
-- **ADR-0021** — `SubtitleEngine`, el primer Engine sin Service ni
-  Provider inyectado: no hay nada externo que llamar para estimar
-  tiempo de lectura desde texto. Tiempo estimado por
-  `words_per_minute` configurable, no por duración real del audio
-  (decodificar audio para medir duración exacta es una dependencia
-  nueva sin consumidor real que la pida todavía). `SceneSubtitle` sí
-  repite el texto de la escena, a diferencia de `SceneAudio`/
-  `SceneImage` — el texto es el artefacto, no hay payload binario
-  sustituto. `render_srt()` vive separado del tipo de resultado, mismo
-  principio de "tipo agnóstico de formato, renderizado aparte" en toda
-  la capa de Engines. `StoryWorkflow` coordina ahora los cuatro
-  Engines; `create story` no requiere ninguna clave de API nueva para
-  este Engine, y persiste un único `story.srt` compartido (no uno por
-  escena). Vinculante para cualquier Engine futuro que resulte ser
-  puramente computacional: es una posición válida en el diagrama de
-  ADR-0008, no una desviación de él.
+- **ADR-0001** a **ADR-0021** — ver PRs anteriores; sin cambios.
+- **ADR-0022** — `SubtitleEngine.caption()` gana un segundo parámetro,
+  `audio: StoryAudio`, y mide la duración real de cada escena vía
+  `measure_duration_seconds` (usa `mutagen`, primera dependencia base
+  no opcional del proyecto — distinta categoría que
+  `anthropic`/`elevenlabs`/`openai`, que son SDKs de proveedores
+  intercambiables; `mutagen` es infraestructura genérica sin vendor
+  lock-in). `words_per_minute` se conserva como fallback para una
+  escena sin duración medible, no como método principal — la misma
+  degradación gradual que hace que los tests con "audio" falso
+  (bytes de texto plano, patrón ya establecido desde PR-012) sigan
+  funcionando sin cambios. El orden síntesis→subtitulado en
+  `StoryWorkflow` deja de ser una elección estética para ser una
+  dependencia real. Vinculante para cualquier medición futura similar:
+  medir cuando sea posible, degradar con gracia cuando no, documentar
+  la categoría de la dependencia nueva (vendor SDK opcional vs.
+  infraestructura base) explícitamente en su ADR.
 
 ## Criterios de aceptación vigentes
 
@@ -111,32 +111,33 @@ uv run velora
 uv run pytest
 ```
 
-El Core mantiene cobertura de pruebas ≥90%; PR-018 cierra con 100%.
+El Core mantiene cobertura de pruebas ≥90%; PR-019 cierra con 100%.
 `velora create story` sigue requiriendo las mismas tres claves de API
-que en PR-016/PR-017 — `SubtitleEngine` no añade ninguna nueva.
+que en PR-016/PR-017/PR-018 — esta medición no añade ninguna nueva ni
+cambia el comportamiento observable de la CLI más allá de subtítulos
+más precisos.
 
 ## Próximo paso
 
-Con los cuatro Engines del pipeline de ejemplo de `docs/VISION.md`
-coordinados hasta "insertar subtítulos", los siguientes pasos de ese
-mismo pipeline —"construir timeline" y "renderizar"— son los primeros
-que dependerían de *todos* los resultados existentes a la vez, no solo
-de uno nuevo. Caminos razonables para `Genera PR-019`:
+Con los subtítulos ya cronometrados con precisión, la limitación que
+quedaba documentada explícitamente en ADR-0021 está resuelta. Caminos
+razonables para `Genera PR-020`:
 
-1. **Medir la duración real del audio** para que el tiempo de los
-   subtítulos deje de ser una estimación — cierra la limitación
-   documentada en ADR-0021, con un consumidor real (los propios
-   subtítulos) que ya lo necesita.
-2. **Timeline Engine** (según `docs/VISION.md`) — el primer Engine que
-   combinaría texto, audio, imágenes, y subtítulos en una estructura
-   temporal única, en vez de cuatro resultados paralelos.
-3. **Un cuarto dominio de Provider/Service** (video, música,
-   traducción) — sigue disponible, aunque cada vez con menos urgencia:
-   ya hay cuatro capacidades reales sin haber saturado ninguna con
-   consumidores.
+1. **Timeline Engine** (según `docs/VISION.md`) — el siguiente paso del
+   pipeline de ejemplo: combinar texto, audio, imágenes, y subtítulos
+   en una estructura temporal única, en vez de cuatro resultados
+   paralelos que la CLI solo yuxtapone por convención de nombres de
+   archivo.
+2. **Un cuarto dominio de Provider/Service** (video, música,
+   traducción) — sigue disponible.
+3. **Mejoras al propio `create story`** — p. ej. reanudar ejecuciones
+   fallidas, o validar que el número de escenas de audio/imágenes/
+   subtítulos coincide siempre (ya lo garantiza el diseño actual, pero
+   podría documentarse con una prueba de propiedad más explícita).
 
-Mi inclinación, si preguntas: opción 1. Es la más barata de las tres
-(no requiere un nuevo dominio ni una decisión de diseño grande) y
-resuelve honestamente una limitación que este mismo PR dejó anotada en
-vez de ocultarla. Pero, como en la decisión anterior, no hay una
-urgencia clara — dime hacia dónde prefieres llevarlo y sigo.
+Mi inclinación, si preguntas: opción 1. Es el paso que el pipeline de
+`docs/VISION.md` documenta a continuación, y el primero que
+genuinamente necesitaría los cuatro resultados a la vez — hasta ahora,
+cada Engine nuevo dependía como mucho de dos (`Story` y, desde este PR,
+`StoryAudio`). Pero, como en decisiones recientes, no hay una urgencia
+clara — dime hacia dónde prefieres llevarlo y sigo.
