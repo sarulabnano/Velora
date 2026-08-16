@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -428,6 +429,36 @@ def test_create_story_saves_a_transcript_and_one_file_per_scene(tmp_path: Path) 
     assert "The city wakes." in srt
     assert "Night falls." in srt
     assert "-->" in srt
+
+    timeline = json.loads((output_dir / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline["topic"] == "A day in the city"
+    assert [s["index"] for s in timeline["scenes"]] == [0, 1]
+    assert timeline["scenes"][0]["text"] == "The city wakes."
+    assert timeline["scenes"][0]["audio_file"] == "scene_000.mp3"
+    assert timeline["scenes"][0]["image_file"] == "scene_000.png"
+    assert timeline["scenes"][0]["start_seconds"] == 0.0
+    assert timeline["scenes"][1]["audio_file"] == "scene_001.mp3"
+
+
+def test_create_story_prints_the_timeline_filename(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    provider = _FakeTextGenerationProvider("A scene.")
+    factory, _ = _provider_factory(provider)
+    voice_factory, _ = _voice_provider_factory(_FakeVoiceProvider())
+    image_factory, _ = _image_provider_factory(_FakeImageProvider())
+
+    exit_code = main(
+        ["create", "story", "--topic", "Anything", "--output-dir", str(tmp_path)],
+        settings_loader=_settings_loader_with_all_api_keys,
+        provider_factory=factory,
+        voice_provider_factory=voice_factory,
+        image_provider_factory=image_factory,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Timeline: timeline.json" in captured.out
 
 
 def test_create_story_prints_the_subtitles_filename(

@@ -5,7 +5,7 @@ repositorio. No describe fases futuras del roadmap; esas se documentan en
 `PROJECT_CONTEXT.md` (estado), `docs/VISION.md` (visión de producto) y
 los ADR (decisiones).
 
-## Estado: Engines — `SubtitleEngine` cronometra por duración real del audio
+## Estado: Engines — `TimelineEngine`; Workflows — `StoryWorkflow` coordina sus cinco Engines
 
 Fase completada: **Foundation** (PR-001), **Runtime** (PR-002),
 **Configuration** (PR-003), **Logging** (PR-004), **Services —
@@ -21,12 +21,13 @@ ImageService** (PR-015), **Engines — SceneImageEngine; Workflows —
 persistencia a disco** (PR-017), **Engines — SubtitleEngine; Workflows
 — `StoryWorkflow` coordina los cuatro Engines; CLI — persiste
 `story.srt`** (PR-018), **Engines — `SubtitleEngine` mide la duración
-real del audio en vez de estimarla** (PR-019). El pipeline de `create
-story` cubre ahora los cuatro Engines del pipeline de ejemplo de
-`docs/VISION.md` hasta "insertar subtítulos", con subtítulos
-cronometrados con precisión sobre el audio real generado. Fase
-siguiente: a decidir — un Timeline Engine, o un cuarto dominio de
-Provider. Ver `PROJECT_CONTEXT.md`.
+real del audio en vez de estimarla** (PR-019), **Engines —
+TimelineEngine; Workflows — `StoryWorkflow` coordina los cinco Engines;
+CLI — persiste `timeline.json`** (PR-020). El pipeline de `create
+story` cubre ahora los cinco Engines del pipeline de ejemplo de
+`docs/VISION.md` hasta "construir timeline". Fase siguiente: a decidir
+— un Render Engine, o un cuarto dominio de Provider. Ver
+`PROJECT_CONTEXT.md`.
 
 ## Estructura del repositorio
 
@@ -80,6 +81,10 @@ src/velora/
             _engine.py               # SubtitleEngine
             _duration.py             # measure_duration_seconds
             _srt.py                  # render_srt
+        timeline/
+            __init__.py         # Superficie pública del Timeline Engine
+            _types.py              # TimelineScene, Timeline
+            _engine.py               # TimelineEngine
     workflows/
         __init__.py         # Namespace, sin lógica compartida todavía
         story/
@@ -95,7 +100,7 @@ tests/
     test_services_*.py            # 4 archivos (incluye narration, voice, image)
     test_providers_*.py           # 4 archivos (más 3 de voice, más 3 de image)
     test_engines_*.py             # 4 archivos (más 2 de narration_audio, más 2 de
-                                   # scene_image, más 4 de subtitle)
+                                   # scene_image, más 4 de subtitle, más 2 de timeline)
     test_workflows_*.py           # 1 archivo
     test_no_direct_environ_access.py     # invariante ejecutable
 docs/
@@ -342,32 +347,65 @@ subtítulos con precisión:
   (`velora.engines.subtitle._srt`): el Engine no decide el formato de
   salida.
 
+### `velora.engines.timeline`
+
+Quinto Engine (ADR-0023), y el primero que depende de tres Engines
+anteriores a la vez — por tipo, no por lógica; sin Service ni Provider
+inyectado, no llama a nada externo:
+
+- **`TimelineScene`** (`index`, `text: str`, `audio: bytes`,
+  `audio_format: str`, `image: bytes`, `image_format: str`,
+  `start_seconds: float`, `end_seconds: float`) — a diferencia de
+  `SceneAudio`/`SceneImage`/`SceneSubtitle`, repite *todos* sus campos:
+  existe precisamente para eliminar la necesidad de correlacionar
+  cuatro colecciones distintas por índice a mano. **`Timeline`**
+  (`topic`, `scenes`).
+- **`TimelineEngine`** — sin estado propio. `build(story: Story, audio:
+  StoryAudio, images: StoryImages, subtitles: StorySubtitles) ->
+  Timeline`: para cada escena de `story`, busca su `SceneAudio`,
+  `SceneImage`, y `SceneSubtitle` correspondientes por `index` y los
+  combina en un `TimelineScene`. Reutiliza `start_seconds`/
+  `end_seconds` que `SubtitleEngine` ya calculó — no los vuelve a
+  medir. A diferencia de la degradación con gracia de `SubtitleEngine`
+  ante audio no parseable (ADR-0022), una escena ausente de cualquiera
+  de las tres colecciones aquí lanza `ValueError` de inmediato: es un
+  error de invariante de quien llama (las cuatro entradas no describen
+  la misma `Story`), no un fallo externo esperado.
+
 ### `velora.workflows.story`
 
 El primer Workflow (ADR-0012), extendido desde PR-013 (ADR-0016) para
-coordinar dos Engines, desde PR-016 (ADR-0019) para coordinar tres, y
-desde PR-018 (ADR-0021) para coordinar los cuatro:
+coordinar dos Engines, desde PR-016 (ADR-0019) para coordinar tres,
+desde PR-018 (ADR-0021) para coordinar cuatro, y desde PR-020
+(ADR-0023) para coordinar los cinco:
 
 - **`NarratedStory`** (`story: Story`, `audio: StoryAudio`, `images:
-  StoryImages`, `subtitles: StorySubtitles`) — compone el resultado de
-  los cuatro Engines sin duplicar sus campos ni aplanarlos en un tipo
-  nuevo; el mismo criterio de "reflejar, no reinventar" que ADR-0015 ya
-  aplicó a `SceneAudio`/`StoryAudio`, aquí aplicado componiendo cuatro
-  tipos existentes en vez de espejar uno.
+  StoryImages`, `subtitles: StorySubtitles`, `timeline: Timeline`) —
+  compone el resultado de los cinco Engines sin duplicar sus campos ni
+  aplanarlos en un tipo nuevo; el mismo criterio de "reflejar, no
+  reinventar" que ADR-0015 ya aplicó a `SceneAudio`/`StoryAudio`, aquí
+  aplicado componiendo cinco tipos existentes en vez de espejar uno.
+  `timeline` no es redundante con los otros cuatro: cada uno de esos es
+  la salida propia de un Engine, mantenida atribuible por separado;
+  `timeline` es la síntesis que `TimelineEngine` hace de los cuatro.
 - **`StoryWorkflow`** — envuelve un `StoryEngine`, un
-  `NarrationAudioEngine`, un `SceneImageEngine`, **y** un
-  `SubtitleEngine`, los cuatro inyectados. `run(topic: str, *,
+  `NarrationAudioEngine`, un `SceneImageEngine`, un `SubtitleEngine`,
+  **y** un `TimelineEngine`, los cinco inyectados. `run(topic: str, *,
   max_tokens=1024) -> NarratedStory`: construye la `Story` con
-  `StoryEngine.build_story()`, la sintetiza, la ilustra, y la subtitula,
-  en ese orden. Desde PR-019 (ADR-0022), el subtitulado deja de ser
-  independiente de la síntesis: `caption()` necesita el `StoryAudio` ya
-  producido para cronometrarse contra él, así que debe ejecutarse
-  después de `synthesize()` — sigue sin depender de la ilustración. Sin
-  jerarquía de error propia: propaga `ValueError` (de `StoryEngine`) y
+  `StoryEngine.build_story()`, la sintetiza, la ilustra, la subtitula,
+  y por último construye el timeline. Desde PR-019 (ADR-0022), el
+  subtitulado depende del `StoryAudio` ya producido, así que debe
+  ejecutarse después de `synthesize()` — sigue sin depender de la
+  ilustración. Desde PR-020 (ADR-0023), construir el timeline es el
+  único paso que necesita los tres resultados anteriores a la vez, así
+  que se ejecuta al final. Sin jerarquía de error propia: propaga
+  `ValueError` (de `StoryEngine`; `TimelineEngine.build` también puede
+  lanzar `ValueError`, pero nunca a través de este método, ya que sus
+  cuatro entradas siempre describen la misma `story`) y
   `VeloraProviderError` (de cualquiera de los tres Providers
-  subyacentes — el subtitulado no puede fallar así, no tiene Provider)
-  tal cual. Sin resultado parcial: una falla en cualquier paso no
-  devuelve ni la `Story` sola ni un `NarratedStory` incompleto.
+  subyacentes — subtitulado y timeline no pueden fallar así, no tienen
+  Provider) tal cual. Sin resultado parcial: una falla en cualquier
+  paso no devuelve ni la `Story` sola ni un `NarratedStory` incompleto.
 
 `velora.workflows` (raíz) no contiene nada todavía — ningún patrón
 compartido entre Workflows ha justificado infraestructura en la raíz
@@ -380,26 +418,29 @@ Primer subcomando real de la CLI, más allá del smoke-run de Runtime
 `AnthropicTextGenerationProvider` → `NarrationService` → `StoryEngine`,
 `ElevenLabsVoiceProvider` → `VoiceService` → `NarrationAudioEngine`
 (desde PR-013, ADR-0016), `OpenAIImageProvider` → `ImageService` →
-`SceneImageEngine` (desde PR-016, ADR-0019), y `SubtitleEngine`
-directamente, sin Provider ni Service (desde PR-018, ADR-0021) — en el
-composition root, registrando los tres Providers (no cuatro:
-`SubtitleEngine` no tiene uno) como `LifecycleComponent`s de un
-`Runtime` propio (distinto del que usa el smoke-run por defecto).
-Requiere `VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`, **y**
+`SceneImageEngine` (desde PR-016, ADR-0019), `SubtitleEngine`
+directamente, sin Provider ni Service (desde PR-018, ADR-0021), y
+`TimelineEngine` directamente, tampoco con Provider ni Service (desde
+PR-020, ADR-0023) — en el composition root, registrando los tres
+Providers (no cinco: `SubtitleEngine` y `TimelineEngine` no tienen
+ninguno) como `LifecycleComponent`s de un `Runtime` propio (distinto
+del que usa el smoke-run por defecto). Requiere
+`VELORA_ANTHROPIC_API_KEY`, `VELORA_ELEVENLABS_API_KEY`, **y**
 `VELORA_OPENAI_API_KEY` (`velora.configuration`, los tres campos
 opcionales — se validan en el punto de uso, no al resolver
 Configuration; falla rápido si falta cualquiera de las tres, antes de
 construir ningún Provider) — sin ninguna clave nueva para
-`SubtitleEngine`. Gana el argumento `--words-per-minute` (por defecto
-`150.0`), que desde PR-019 (ADR-0022) documenta explícitamente que es
-un ritmo de reserva, usado solo cuando la duración de una escena no
-puede medirse desde su audio generado. Los imports de `anthropic`,
-`elevenlabs`, `openai`, `NarrationService`, `VoiceService`,
-`ImageService`, `StoryEngine`, `NarrationAudioEngine`,
-`SceneImageEngine`, `SubtitleEngine`, y `StoryWorkflow` viven dentro de
-las funciones que los usan, no a nivel de módulo: importar `velora.cli`
-(y ejecutar cualquier comando distinto de `create story`) nunca
-requiere los extras opcionales `velora[anthropic]`, `velora[elevenlabs]`, ni
+`SubtitleEngine` ni `TimelineEngine`. Gana el argumento
+`--words-per-minute` (por defecto `150.0`), que desde PR-019
+(ADR-0022) documenta explícitamente que es un ritmo de reserva, usado
+solo cuando la duración de una escena no puede medirse desde su audio
+generado. Los imports de `anthropic`, `elevenlabs`, `openai`,
+`NarrationService`, `VoiceService`, `ImageService`, `StoryEngine`,
+`NarrationAudioEngine`, `SceneImageEngine`, `SubtitleEngine`,
+`TimelineEngine`, y `StoryWorkflow` viven dentro de las funciones que
+los usan, no a nivel de módulo: importar `velora.cli` (y ejecutar
+cualquier comando distinto de `create story`) nunca requiere los
+extras opcionales `velora[anthropic]`, `velora[elevenlabs]`, ni
 `velora[openai]`.
 
 Desde PR-017 (ADR-0020), persiste su resultado a disco:
@@ -407,15 +448,23 @@ Desde PR-017 (ADR-0020), persiste su resultado a disco:
 (`--output-dir` por defecto `.`; `runtime_id` es el mismo id que el
 `Runtime` de esa ejecución ya genera), un `story.txt` con la
 transcripción, un archivo `scene_{index:03d}.{formato}` por escena
-para audio y otro para imagen, y (desde PR-018, ADR-0021) un único
-`story.srt` compartido (no uno por escena — un archivo `.srt` ya
-contiene sus propios límites de escena como cues numerados). Ocurre
-después de que `StoryWorkflow` completa con éxito y antes de imprimir
-cualquier salida — lo impreso describe lo ya escrito. Un `OSError` al
-persistir se reporta como `fatal`, igual que cualquier otro fallo de
-este comando. Imprime el nombre del archivo de subtítulos, y, por
-escena, el texto y los nombres de los dos archivos guardados (audio e
-imagen), y la ruta completa del directorio de esa ejecución.
+para audio y otro para imagen, un único `story.srt` compartido (desde
+PR-018, ADR-0021 — no uno por escena, un archivo `.srt` ya contiene sus
+propios límites de escena como cues numerados), y (desde PR-020,
+ADR-0023) un único `timeline.json`: un manifiesto legible por máquina,
+por escena, con `index`, `text`, `audio_file`/`image_file` (los mismos
+nombres de archivo que esta función ya calculó para los binarios) y
+`start_seconds`/`end_seconds` (de `narrated_story.timeline`). Los
+nombres de archivo son una decisión de esta capa de persistencia, no
+de `Timeline`/`TimelineScene` — misma separación que `render_srt()` ya
+mantiene respecto a `StorySubtitles`. Ocurre después de que
+`StoryWorkflow` completa con éxito y antes de imprimir cualquier salida
+— lo impreso describe lo ya escrito. Un `OSError` al persistir se
+reporta como `fatal`, igual que cualquier otro fallo de este comando.
+Imprime el nombre del archivo de subtítulos, el del manifiesto de
+timeline, y, por escena, el texto y los nombres de los dos archivos
+guardados (audio e imagen), y la ruta completa del directorio de esa
+ejecución.
 
 ## Dependencias entre componentes
 
@@ -448,10 +497,15 @@ velora.engines.scene_image  →  velora.engines.story  (solo el tipo `Story`)
 velora.engines.subtitle  →  velora.engines.story  (solo el tipo `Story`)
 velora.engines.subtitle  →  velora.engines.narration_audio  (solo el tipo `StoryAudio`, desde PR-019)
 velora.engines.subtitle._duration  →  mutagen (dependencia base, no extra)
+velora.engines.timeline  →  velora.engines.story  (solo el tipo `Story`)
+velora.engines.timeline  →  velora.engines.narration_audio  (solo el tipo `StoryAudio`)
+velora.engines.timeline  →  velora.engines.scene_image  (solo el tipo `StoryImages`)
+velora.engines.timeline  →  velora.engines.subtitle  (solo el tipo `StorySubtitles`)
 velora.workflows.story  →  velora.engines.story
 velora.workflows.story  →  velora.engines.narration_audio
 velora.workflows.story  →  velora.engines.scene_image
 velora.workflows.story  →  velora.engines.subtitle
+velora.workflows.story  →  velora.engines.timeline
 ```
 
 `velora.engines.story` no importa `velora.providers` ni `anthropic` en
@@ -463,25 +517,27 @@ ambos dependen de `velora.engines.story` únicamente para el tipo
 `Story` que reciben como entrada, no para ninguna lógica.
 `velora.engines.subtitle` no depende de ningún `velora.services.*` en
 absoluto — solo de `velora.engines.story` (por `Story`) y, desde PR-019
-(ADR-0022), de `velora.engines.narration_audio` (por `StoryAudio`, el
-único caso en todo `velora.engines` donde un Engine depende del tipo de
-resultado de *otro* Engine, no solo de `Story`) — sigue sin depender de
-ningún Service ni Provider (ADR-0021).
-`velora.workflows.story` sigue la misma regla: solo importa
-`velora.engines.story`, `velora.engines.narration_audio`,
-`velora.engines.scene_image`, y `velora.engines.subtitle`, nunca se
-salta una capa hacia `velora.services.*` o `velora.providers`
-directamente. `velora.cli` construye la cadena completa, pero solo
-dentro de la ejecución de `create story` — sus imports de
-`velora.workflows.story`, `velora.providers.text_generation`,
-`velora.providers.voice`, y `velora.providers.image` están diferidos
-dentro de las funciones que los usan, no a nivel de módulo (ADR-0012),
-precisamente para que el resto de comandos de la CLI —y el propio
-`import velora.cli`— nunca dependan de los extras `velora[anthropic]`,
-`velora[elevenlabs]`, ni `velora[openai]`. `velora.engines.
-narration_audio`, `velora.engines.scene_image`, y `velora.engines.
-subtitle` tienen ya, los tres, un consumidor real: `StoryWorkflow`
-coordina los cuatro Engines desde PR-018 (ADR-0021).
+(ADR-0022), de `velora.engines.narration_audio` (por `StoryAudio`) —
+sigue sin depender de ningún Service ni Provider (ADR-0021).
+`velora.engines.timeline` tampoco depende de ningún `velora.services.*`
+— es el primer Engine que depende de tres Engines anteriores a la vez
+(`velora.engines.story`, `velora.engines.narration_audio`,
+`velora.engines.scene_image`, y `velora.engines.subtitle`), únicamente
+por sus tipos de resultado, nunca por su lógica (ADR-0023).
+`velora.workflows.story` sigue la misma regla: solo importa los cinco
+paquetes de `velora.engines`, nunca se salta una capa hacia
+`velora.services.*` o `velora.providers` directamente. `velora.cli`
+construye la cadena completa, pero solo dentro de la ejecución de
+`create story` — sus imports de `velora.workflows.story`,
+`velora.providers.text_generation`, `velora.providers.voice`, y
+`velora.providers.image` están diferidos dentro de las funciones que
+los usan, no a nivel de módulo (ADR-0012), precisamente para que el
+resto de comandos de la CLI —y el propio `import velora.cli`— nunca
+dependan de los extras `velora[anthropic]`, `velora[elevenlabs]`, ni
+`velora[openai]`. `velora.engines.narration_audio`,
+`velora.engines.scene_image`, `velora.engines.subtitle`, y
+`velora.engines.timeline` tienen ya, los cuatro, un consumidor real:
+`StoryWorkflow` coordina los cinco Engines desde PR-020 (ADR-0023).
 `velora.providers.image`/`velora.services.image` (PR-014/PR-015,
 ADR-0017/ADR-0018) dejaron de estar aislados desde PR-016: ahora
 alcanzan al resto del sistema a través de `SceneImageEngine`.
@@ -490,11 +546,12 @@ alcanzan al resto del sistema a través de `SceneImageEngine`.
 
 Extensions. Tampoco existen más Providers de imagen (Flux, Stable
 Diffusion, MidJourney), ni Providers de ningún otro dominio (video,
-música, traducción). Más Engines (Timeline, Render, Publish — ver
+música, traducción). Más Engines (Render, Publish — ver
 `docs/VISION.md`), ni más Workflows que `StoryWorkflow`, siguen sin
-existir. Ningún mecanismo para reanudar o reutilizar una ejecución
-anterior de `create story` desde su directorio ya guardado — cada
-ejecución es independiente. Cualquier mención a esas capas en otros
-documentos es planificación, no arquitectura vigente. Este documento se
-actualizará en cada PR que
+existir. Ningún mecanismo para renderizar el `Timeline` a un video
+real — `timeline.json` es el manifiesto, no el video. Ningún mecanismo
+para reanudar o reutilizar una ejecución anterior de `create story`
+desde su directorio ya guardado — cada ejecución es independiente.
+Cualquier mención a esas capas en otros documentos es planificación,
+no arquitectura vigente. Este documento se actualizará en cada PR que
 introduzca una capa o dominio nuevo.

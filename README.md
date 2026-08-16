@@ -7,7 +7,7 @@ inicial.
 
 ## Estado actual
 
-**Fase: Engines — `SubtitleEngine` cronometra por duración real del audio** (PR-019). Ver
+**Fase: Engines — `TimelineEngine`; Workflows — `StoryWorkflow` coordina sus cinco Engines** (PR-020). Ver
 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) para el estado detallado,
 [`docs/architecture.md`](docs/architecture.md) para la arquitectura
 vigente, y [`docs/VISION.md`](docs/VISION.md) para la visión de producto.
@@ -242,25 +242,41 @@ with open("story.srt", "w", encoding="utf-8") as f:
 principal: solo se usa si la duración de una escena en particular no
 puede medirse desde su audio (formato no soportado, o corrupto).
 
+`TimelineEngine` es el quinto, y organiza los cuatro resultados
+anteriores en una sola secuencia alineada por escena — tampoco llama a
+nada externo:
+
+```python
+from velora.engines.timeline import TimelineEngine
+
+timeline_engine = TimelineEngine()  # sin Service, sin Provider
+# story, story_audio, story_images, story_subtitles de arriba
+timeline = timeline_engine.build(story, story_audio, story_images, story_subtitles)
+
+for scene in timeline.scenes:
+    print(f"[{scene.index}] {scene.start_seconds}s - {scene.end_seconds}s: {scene.text}")
+```
+
 ## Workflows
 
-`StoryWorkflow` es el primer Workflow, y desde PR-018 coordina los
-cuatro Engines de arriba: envuelve un `StoryEngine`, un
-`NarrationAudioEngine`, un `SceneImageEngine`, y un `SubtitleEngine`
-inyectados, y ejecuta el pipeline completo (`docs/VISION.md`: "Los
-Workflows conectan todos los motores"):
+`StoryWorkflow` es el primer Workflow, y desde PR-020 coordina los
+cinco Engines de arriba: envuelve un `StoryEngine`, un
+`NarrationAudioEngine`, un `SceneImageEngine`, un `SubtitleEngine`, y
+un `TimelineEngine` inyectados, y ejecuta el pipeline completo
+(`docs/VISION.md`: "Los Workflows conectan todos los motores"):
 
 ```python
 from velora.workflows.story import StoryWorkflow
 
 # los mismos Engines de arriba
-workflow = StoryWorkflow(engine, audio_engine, image_engine, subtitle_engine)
+workflow = StoryWorkflow(engine, audio_engine, image_engine, subtitle_engine, timeline_engine)
 narrated_story = workflow.run("The history of the printing press")
 
 story = narrated_story.story
 story_audio = narrated_story.audio
 story_images = narrated_story.images
 story_subtitles = narrated_story.subtitles  # cronometrados por la duración real de story_audio
+timeline = narrated_story.timeline  # los cuatro anteriores, alineados por escena
 ```
 
 También es el primer subcomando real de la CLI, más allá del smoke-run
@@ -278,6 +294,7 @@ uv run velora create story --topic "The history of the printing press" \
 Story: The history of the printing press (3 scene(s))
 Saved to: output/3f2a9e1c-...
 Subtitles: story.srt
+Timeline: timeline.json
 
 [0] ...
     audio: scene_000.mp3
@@ -290,17 +307,19 @@ Subtitles: story.srt
     image: scene_002.png
 ```
 
-`SubtitleEngine` no requiere ninguna clave de API adicional. Desde
-PR-019, el tiempo de cada subtítulo se mide directamente de la
-duración real del audio generado; `--words-per-minute` (por defecto,
-`150.0`) solo aplica como reserva para una escena cuya duración no
-pueda medirse.
+`SubtitleEngine` y `TimelineEngine` no requieren ninguna clave de API
+adicional. Desde PR-019, el tiempo de cada subtítulo se mide
+directamente de la duración real del audio generado;
+`--words-per-minute` (por defecto, `150.0`) solo aplica como reserva
+para una escena cuya duración no pueda medirse.
 
 `--output-dir` es opcional (por defecto, el directorio actual). Cada
 ejecución crea su propio subdirectorio, nombrado con el `runtime_id` de
 esa ejecución, así que ejecuciones sucesivas con el mismo
 `--output-dir` nunca se pisan entre sí. Dentro de ese subdirectorio:
-`story.txt` (la transcripción completa) y un archivo de audio y uno de
+`story.txt` (la transcripción completa), `story.srt`, `timeline.json`
+(manifiesto legible por máquina: por escena, nombres de archivo de
+audio/imagen y su ventana de tiempo), y un archivo de audio y uno de
 imagen por escena.
 
 ## Desarrollo

@@ -48,11 +48,18 @@ Since PR-019 (ADR-0022), subtitle timing is measured from each scene's
 real synthesized audio rather than estimated from word count alone;
 `--words-per-minute` now only controls the fallback rate used when a
 scene's duration can't be measured.
+
+Since PR-020 (ADR-0023), `create story` also builds a `TimelineEngine`
+(no Provider, no API key) and saves its result as `timeline.json` — a
+manifest naming each scene's saved audio/image files alongside its
+timing, so the output directory can be consumed programmatically
+without re-deriving that alignment.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -256,19 +263,26 @@ def _default_workflow_runtime_factory(
 
 
 def _save_narrated_story(narrated_story: NarratedStory, output_dir: Path) -> None:
-    """Persist a `NarratedStory` to `output_dir` (ADR-0020, ADR-0021).
+    """Persist a `NarratedStory` to `output_dir` (ADR-0020, ADR-0021,
+    ADR-0023).
 
     Writes one `scene_{index:03d}.{format}` file per scene for both
     `narrated_story.audio` and `narrated_story.images`, a `story.txt`
     transcript (the topic and every scene's text, the same content
-    `_run_create_story` already prints to stdout), and a single
-    `story.srt` file (all scenes' captions, via
-    `velora.engines.subtitle.render_srt`) — one shared file, not one per
-    scene, since an SRT file's cues already carry their own scene
-    boundaries; splitting it per scene would only make it harder to load
-    into a video editor as a single subtitle track. `output_dir` alone
-    is a complete, self-contained deliverable: audio, images, captions,
-    and the text that ties them together, not just the binary artifacts.
+    `_run_create_story` already prints to stdout), a single `story.srt`
+    file (all scenes' captions, via `velora.engines.subtitle.render_srt`)
+    — one shared file, not one per scene, since an SRT file's cues
+    already carry their own scene boundaries; splitting it per scene
+    would only make it harder to load into a video editor as a single
+    subtitle track — and, since PR-020 (ADR-0023), a `timeline.json`
+    manifest: one entry per scene, naming the audio and image files
+    already written above and repeating that scene's timing from
+    `narrated_story.timeline`, so a future Render step (or any external
+    tool) can align everything without re-deriving which files or
+    timestamps belong to which scene. `output_dir` alone is a complete,
+    self-contained deliverable: audio, images, captions, a machine-
+    readable manifest, and the text that ties them together, not just
+    the binary artifacts.
 
     `output_dir` is created (with any missing parents) if it doesn't
     exist yet — mirrors `mkdir -p`, since a fresh, generated
@@ -296,6 +310,24 @@ def _save_narrated_story(narrated_story: NarratedStory, output_dir: Path) -> Non
     for scene_image in narrated_story.images.scenes:
         path = output_dir / f"scene_{scene_image.index:03d}.{scene_image.image_format}"
         path.write_bytes(scene_image.image)
+
+    timeline_manifest = {
+        "topic": narrated_story.timeline.topic,
+        "scenes": [
+            {
+                "index": scene.index,
+                "text": scene.text,
+                "audio_file": f"scene_{scene.index:03d}.{scene.audio_format}",
+                "image_file": f"scene_{scene.index:03d}.{scene.image_format}",
+                "start_seconds": scene.start_seconds,
+                "end_seconds": scene.end_seconds,
+            }
+            for scene in narrated_story.timeline.scenes
+        ],
+    }
+    (output_dir / "timeline.json").write_text(
+        json.dumps(timeline_manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _run_create_story(
@@ -361,6 +393,7 @@ def _run_create_story(
     from velora.engines.scene_image import SceneImageEngine
     from velora.engines.story import StoryEngine
     from velora.engines.subtitle import SubtitleEngine
+    from velora.engines.timeline import TimelineEngine
     from velora.services.image import ImageService
     from velora.services.narration import NarrationService
     from velora.services.voice import VoiceService
@@ -374,6 +407,7 @@ def _run_create_story(
         NarrationAudioEngine(VoiceService(voice_provider)),
         SceneImageEngine(ImageService(image_provider)),
         SubtitleEngine(words_per_minute=args.words_per_minute),
+        TimelineEngine(),
     )
 
     runtime = workflow_runtime_factory(
@@ -397,6 +431,7 @@ def _run_create_story(
     print(f"Story: {story.topic} ({len(story.scenes)} scene(s))")
     print(f"Saved to: {output_dir}")
     print("Subtitles: story.srt")
+    print("Timeline: timeline.json")
     for scene, scene_audio, scene_image in zip(
         story.scenes, narrated_story.audio.scenes, narrated_story.images.scenes, strict=True
     ):
